@@ -68,7 +68,8 @@
         /* ========================================== */
         #call-view { background: #1e1e2e; flex-direction: column; padding: 15px; gap: 15px; overflow: hidden; }
         .call-header { display: flex; justify-content: space-between; align-items: center; background: #2a2a3f; padding: 10px 15px; border-radius: 12px; flex-shrink: 0; }
-        .call-header h1 { margin: 0; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .call-header h1 { margin: 0; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 8px; }
+        .e2e-badge { font-size: 10px; background: #a6e3a1; color: #1e1e2e; padding: 3px 6px; border-radius: 4px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; }
         .status { color: #89b4fa; font-size: 13px; margin-top: 2px; font-weight: bold; }
         
         .main-container { display: flex; flex: 1; gap: 15px; min-height: 0; flex-direction: row; }
@@ -211,7 +212,7 @@
     <div id="call-view" class="view-container">
         <div class="call-header">
             <div style="min-width: 0;">
-                <h1>Семейная связь</h1>
+                <h1>Семейная связь <span class="e2e-badge" title="Соединение зашифровано (End-to-End)">🔒 E2EE</span></h1>
                 <div id="call-status" class="status">Ожидание действий...</div>
             </div>
         </div>
@@ -262,6 +263,8 @@
             <div style="font-size: 11px; font-weight: bold; margin-bottom: 4px; color: #555;">Микрофон:</div>
             <div class="mic-bar-bg"><div id="mic-level"></div></div>
             <p style="font-size: 11px; color: #666; margin-top:0;">* На телефонах камера работает только если сайт открыт по HTTPS.</p>
+            <div id="cam-error-msg" style="display: none; color: #f44336; font-size: 12px; margin-bottom: 10px; font-weight: bold; text-align: center; background: #ffebee; padding: 8px; border-radius: 6px;"></div>
+            <button id="req-perm-btn" style="width: 100%; padding: 10px; background: #1976d2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-bottom: 10px;">🎥 Запросить разрешения</button>
             <button id="close-settings-btn" style="width: 100%; padding: 10px; background: #f44336; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Закрыть</button>
         </div>
     </div>
@@ -477,8 +480,9 @@
 
         // Настройки и микрофон
         let testStream, analyzer, micInterval;
-        document.getElementById('settings-btn').addEventListener('click', async () => {
-            document.getElementById('settings-modal').style.display = 'flex';
+        
+        async function requestMediaPermissions() {
+            document.getElementById('cam-error-msg').style.display = 'none';
             try {
                 // Добавлено facingMode: 'user' для фронтальной камеры телефона
                 testStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true });
@@ -486,6 +490,7 @@
                 const source = audioCtx.createMediaStreamSource(testStream);
                 analyzer = audioCtx.createAnalyser(); analyzer.fftSize = 256; source.connect(analyzer);
                 const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+                if (micInterval) clearInterval(micInterval);
                 micInterval = setInterval(() => {
                     analyzer.getByteFrequencyData(dataArray);
                     let sum = 0; for(let i=0; i < dataArray.length; i++) sum += dataArray[i];
@@ -493,8 +498,22 @@
                     document.getElementById('mic-level').style.width = level + '%';
                     document.getElementById('mic-level').style.background = level > 85 ? '#f44336' : (level > 50 ? '#ff9800' : '#4caf50');
                 }, 50);
-            } catch (e) { alert('Нет доступа к камере! Проверьте, открыт ли сайт по HTTPS (защищенное соединение). На мобильных без HTTPS камера блокируется.'); }
+                document.getElementById('req-perm-btn').innerText = "✅ Разрешения получены";
+                document.getElementById('req-perm-btn').style.background = "#4caf50";
+            } catch (e) { 
+                document.getElementById('cam-error-msg').style.display = 'block';
+                document.getElementById('cam-error-msg').innerHTML = "🚫 Доступ запрещен!<br><br>Нажмите на <b>иконку замка 🔒</b> в адресной строке браузера, выберите «Настройки сайтов» и разрешите Камеру и Микрофон, затем обновите страницу.";
+            }
+        }
+
+        document.getElementById('settings-btn').addEventListener('click', () => {
+            document.getElementById('settings-modal').style.display = 'flex';
+            document.getElementById('req-perm-btn').innerText = "🎥 Запросить разрешения";
+            document.getElementById('req-perm-btn').style.background = "#1976d2";
+            requestMediaPermissions();
         });
+
+        document.getElementById('req-perm-btn').addEventListener('click', requestMediaPermissions);
 
         document.getElementById('close-settings-btn').addEventListener('click', () => {
             document.getElementById('settings-modal').style.display = 'none';
@@ -556,7 +575,10 @@
                 localStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true });
                 callUi.localVideo.srcObject = localStream; callUi.localVideo.style.transform = 'scaleX(-1)';
                 logSys("Камера и микрофон активны");
-            } catch (e) { logSys("Только текстовый режим (камера недоступна)"); }
+            } catch (e) { 
+                logSys("⚠️ Ошибка: Доступ к камере/микрофону запрещен браузером. Откройте настройки сайта (иконка замка 🔒 в адресной строке) и разрешите доступ."); 
+                alert("Не удалось получить доступ к камере или микрофону!\n\nЕсли вы запретили доступ ранее или случайно закрыли окно, браузер больше не покажет запрос автоматически.\n\nВам нужно нажать на иконку замка 🔒 рядом с адресом сайта, вручную разрешить камеру и микрофон, а затем обновить страницу.");
+            }
         }
 
         function makeCall(targetIdStr) {

@@ -38,16 +38,11 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
 .contacts-list-container { background: #fff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
 .contacts-list-container h3 { font-size: 14px; margin: 0 0 10px 0; display: flex; justify-content: space-between; align-items: center; }
 #contacts-list { list-style: none; padding: 0; margin: 0; max-height: 40vh; overflow-y: auto; padding-right: 5px; }
-#contacts-list li { 
-    background: #fafafa; border: 1px solid #eee; border-radius: 8px; margin-bottom: 8px; 
-    position: relative; overflow: hidden; cursor: pointer;
-}
-.contact-content { 
-    display: flex; justify-content: space-between; align-items: center; gap: 10px; 
-    padding: 12px 40px 12px 12px; width: 100%; transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
+#contacts-list li { background: #fafafa; border: 1px solid #eee; border-radius: 8px; margin-bottom: 8px; position: relative; overflow: hidden; cursor: pointer; }
+.contact-content { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 40px 12px 12px; width: 100%; transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
 .contact-info { display: flex; flex-direction: column; overflow: hidden; flex: 1; pointer-events: none; }
-.contact-name { font-weight: bold; font-size: 14px; text-transform: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.contact-name { font-weight: bold; font-size: 14px; text-transform: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
+.unread-badge { background: #f38ba8; color: #1e1e2e; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 10px; display: inline-block; line-height: 1; }
 .contact-id { font-size: 12px; color: #666; font-family: monospace; }
 .contact-actions { display: flex; gap: 4px; }
 
@@ -62,7 +57,6 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
 .del-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 40px; display: flex; align-items: center; justify-content: center; color: #ccc; font-weight: bold; transition: opacity 0.2s; cursor: pointer; z-index: 5; }
 .del-handle:hover { color: #888; background: rgba(0,0,0,0.02); }
 
-/* Скрытая панель с двумя кнопками */
 .swipe-actions { position: absolute; right: -100px; top: 0; bottom: 0; display: flex; transition: right 0.25s cubic-bezier(0.4, 0, 0.2, 1); z-index: 10; }
 .btn-edit, .btn-del { width: 50px; border: none; font-size: 16px; display: flex; align-items: center; justify-content: center; cursor: pointer; margin: 0; transition: background 0.2s; }
 .btn-edit { background: #fff8e1; color: #f57f17; border-left: 1px solid #ffecb3; }
@@ -70,7 +64,6 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
 .btn-del { background: #ffebee; color: #c62828; border-left: 1px solid #ffcdd2; }
 .btn-del:hover { background: #ffcdd2; }
 
-/* Открываем панель ТОЛЬКО по клику/тапу или свайпу */
 #contacts-list li.show-actions .contact-content { transform: translateX(-100px); }
 #contacts-list li.show-actions .swipe-actions { right: 0; }
 #contacts-list li.show-actions .del-handle { opacity: 0; pointer-events: none; }
@@ -89,14 +82,8 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
 .call-header { display: flex; justify-content: space-between; align-items: center; background: #2a2a3f; padding: 10px 15px; border-radius: 12px; flex-shrink: 0; z-index: 50; }
 .call-header h1 { margin: 0; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 8px; }
 .e2e-badge { font-size: 10px; background: #a6e3a1; color: #1e1e2e; padding: 3px 6px; border-radius: 4px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; }
-.status { color: #89b4fa; font-size: 13px; margin-top: 2px; font-weight: bold; transition: color 0.3s; }
+.status { color: #89b4fa; font-size: 13px; font-weight: bold; transition: color 0.3s; }
 
-/* Системные логи (прозрачные) */
-.sys-logs { position: absolute; top: 75px; right: 15px; width: 250px; pointer-events: none; z-index: 1000; display: flex; flex-direction: column; gap: 6px; }
-.sys-log-item { background: rgba(30, 30, 46, 0.75); color: #cdd6f4; font-size: 11px; padding: 8px 12px; border-radius: 8px; border: 1px solid #45475a; backdrop-filter: blur(4px); box-shadow: 0 4px 6px rgba(0,0,0,0.2); animation: fadeout 4s forwards; }
-@keyframes fadeout { 0% { opacity: 0; transform: translateX(20px); } 10% { opacity: 1; transform: translateX(0); } 80% { opacity: 1; } 100% { opacity: 0; } }
-
-/* Main Container */
 .main-container { display: flex; flex: 1; gap: 15px; min-height: 0; flex-direction: row; position: relative; padding-bottom: 50px; }
 
 .video-panel { flex: 3; background: #000; border-radius: 12px; position: relative; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
@@ -113,9 +100,15 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
 
 .chat-panel { flex: 2; background: #2a2a3f; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #45475a; }
 #chat-box { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-.msg { padding: 8px 12px; border-radius: 12px; font-size: 14px; max-width: 85%; word-wrap: break-word; line-height: 1.4; white-space: pre-wrap; }
+
+/* Обновленный стиль для сообщений с галочками */
+.msg { padding: 8px 12px; border-radius: 12px; font-size: 14px; max-width: 85%; line-height: 1.4; display: flex; flex-direction: column; }
+.msg-content { white-space: pre-wrap; word-wrap: break-word; }
+.msg-meta { display: flex; justify-content: flex-end; align-items: center; font-size: 10px; margin-top: 4px; gap: 4px; opacity: 0.8; user-select: none; }
 .msg-mine { background: #89b4fa; color: #1e1e2e; align-self: flex-end; border-bottom-right-radius: 2px; }
+.msg-mine .msg-meta { color: rgba(30, 30, 46, 0.7); }
 .msg-peer { background: #45475a; color: #fff; align-self: flex-start; border-bottom-left-radius: 2px; }
+.msg-peer .msg-meta { color: rgba(255, 255, 255, 0.5); }
 
 #file-progress-container { display: none; padding: 8px 12px; background: #313244; border-top: 1px solid #45475a; font-size: 12px; }
 #file-progress-bar-bg { width: 100%; height: 6px; background: #1e1e2e; border-radius: 3px; margin-top: 5px; overflow: hidden; }
@@ -157,16 +150,11 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
     .call-header { padding: 8px 12px; }
     .call-header h1 { font-size: 16px; }
     
-    /* На мобильных располагаем видео сверху, чат снизу */
     .main-container { flex-direction: column; gap: 10px; padding-bottom: 50px; }
-    
-    /* Фиксируем высоту видео, чтобы чат не исчезал */
     .video-panel { flex: none; height: 40dvh; min-height: 220px; max-height: 50vh; }
-    
     #local-video { width: 80px; bottom: 15px; right: 10px; border-width: 1px; }
     .controls { padding: 6px 10px; gap: 5px; width: auto; max-width: calc(100% - 20px); bottom: 0; }
     .ctrl-btn { padding: 6px 10px; font-size: 11px; gap: 4px; }
-    
     .chat-panel { flex: 1; min-height: 150px; }
     
     #toggle-mic { font-size: 0; }
@@ -181,7 +169,5 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
     #incoming-overlay > div { width: 100%; }
     #incoming-overlay .call-buttons { display: flex; flex-direction: column; gap: 15px; align-items: center; margin-top: 30px; }
     .call-btn-acc, .call-btn-rej { width: 100%; max-width: 250px; }
-    
-    /* Эмодзи пикер для телефона */
     .emoji-picker { right: 10px; left: 10px; grid-template-columns: repeat(8, 1fr); max-height: 150px; }
 }

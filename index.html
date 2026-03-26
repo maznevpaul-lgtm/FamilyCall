@@ -62,8 +62,8 @@
     <!-- ВКЛАДКА 2: ЗВОНОК И ЧАТ -->
     <div id="call-view" class="view-container">
         <div class="call-header">
-            <div style="min-width: 0;">
-                <h1>Семейная связь <span class="e2e-badge" title="Соединение зашифровано (End-to-End)">🔒 E2EE</span></h1>
+            <div style="min-width: 0; flex: 1;">
+                <h1>Семейная связь <span class="e2e-badge" title="Соединение зашифровано (End-to-End)">🔒 E2EE</span> <button id="add-unknown-btn" style="display: none; background: #a6e3a1; color: #1e1e2e; border: none; padding: 4px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-weight: bold; flex-shrink: 0; transition: transform 0.2s;">➕ Сохранить</button></h1>
                 <div id="call-status" class="status">Ожидание действий...</div>
             </div>
         </div>
@@ -88,7 +88,7 @@
                 <div class="input-area">
                     <label id="file-label" for="file-input" style="cursor: pointer; font-size: 20px; opacity: 0.5; pointer-events: none; flex-shrink: 0;" title="Отправить файл">📎</label>
                     <input type="file" id="file-input" style="display: none;">
-                    <input type="text" id="msg-input" placeholder="Напишите..." disabled>
+                    <input type="text" id="msg-input" placeholder="Напишите сообщение..." disabled>
                     <button id="send-btn" disabled>➤</button>
                 </div>
             </div>

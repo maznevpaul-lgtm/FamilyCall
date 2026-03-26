@@ -9,6 +9,8 @@ const rtcConfig = {
     iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun2.l.google.com:19302" },
+        { urls: "stun:stun.cloudflare.com:3478" },
         { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
         { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" }
     ] 
@@ -41,7 +43,8 @@ const callUi = {
     hangupBtn: document.getElementById('hangup-btn'),
     incomingOverlay: document.getElementById('incoming-overlay'),
     incomingCallerId: document.getElementById('incoming-caller-id'),
-    fileInput: document.getElementById('file-input')
+    fileInput: document.getElementById('file-input'),
+    addUnknownBtn: document.getElementById('add-unknown-btn')
 };
 
 // --- 3. ИНИЦИАЛИЗАЦИЯ И ВКЛАДКИ ---
@@ -64,6 +67,27 @@ if (!myId) {
     store.set('contacts', []);
 }
 document.getElementById('my-id-display').innerText = myId;
+
+// --- ФУНКЦИЯ ПРОВЕРКИ И СОХРАНЕНИЯ НЕИЗВЕСТНОГО КОНТАКТА ---
+function checkUnknownContact(id) {
+    const contacts = store.get('contacts') || [];
+    const isKnown = contacts.some(c => c.id === id);
+    if (!isKnown && id && id !== myId) {
+        callUi.addUnknownBtn.style.display = 'inline-block';
+        callUi.addUnknownBtn.onclick = () => {
+            const name = prompt(`Введите имя для нового контакта (${id}):`, "Новый контакт");
+            if (name) {
+                contacts.push({ name: name.trim(), id: id });
+                store.set('contacts', contacts);
+                renderContacts(contacts);
+                callUi.addUnknownBtn.style.display = 'none';
+                logSys(`Контакт ${name} успешно сохранен.`);
+            }
+        };
+    } else {
+        callUi.addUnknownBtn.style.display = 'none';
+    }
+}
 
 // --- 4. АУДИО СИНТЕЗАТОР ---
 function playRingtone() {
@@ -332,6 +356,7 @@ document.getElementById('import-file').addEventListener('change', (e) => {
 
 // --- 6. ЛОГИКА ВЫЗОВОВ И СИГНАЛЬНЫЙ СЕРВЕР ---
 function sendSignal(target, data) {
+    data.timestamp = Date.now(); // Добавляем метку времени для отсеивания старых пакетов
     fetch(`https://ntfy.sh/p2p_call_${target}`, { method: 'POST', body: JSON.stringify(data) }).catch(() => {});
 }
 
@@ -354,6 +379,8 @@ function resetCallUI() {
     document.getElementById('toggle-cam').style.opacity = '1';
     document.getElementById('toggle-cam').style.textDecoration = 'none';
     
+    if (callUi.addUnknownBtn) callUi.addUnknownBtn.style.display = 'none';
+
     isVideoSwapped = false;
     isCaller = false;
     iceCandidateQueue = [];
@@ -367,7 +394,7 @@ function resetCallUI() {
 function loadChatHistory(id) {
     callUi.chatBox.innerHTML = '';
     chatHistory = store.get(`chat_${id}`) || [];
-    chatHistory.forEach(msg => appendMsg(msg.text, msg.isMine, msg.isHtml, false));
+    chatHistory.forEach(msg => appendMsg(msg.text, msg.isMine, msg.isHtml, false, null, msg.id));
 }
 
 // Принудительная отправка ключей при добавлении медиа "на лету"
@@ -433,7 +460,7 @@ async function initMedia(mode) {
         document.getElementById('toggle-mic').style.textDecoration = mode === 'chat' ? 'line-through' : 'none';
         
         if (mode === 'chat') {
-            logSys("Режим чата. Нажмите иконку камеры или микрофона внизу, чтобы добавить их в любой момент.");
+            logSys("Вы в чате. Собеседник получит сообщение, как только откроет приложение.");
             return;
         }
     } else {
@@ -468,7 +495,7 @@ async function initMedia(mode) {
     }
 }
 
-// Новая логика для старта тихого чата
+// Новая логика для старта чата (можно писать сразу)
 function startChat(targetIdStr) {
     targetId = targetIdStr.toUpperCase();
     currentCallMode = 'chat';
@@ -477,39 +504,33 @@ function startChat(targetIdStr) {
     iceCandidateQueue = [];
     switchTab('call');
     
-    callUi.status.innerText = `Подключение к ${targetId}...`;
+    checkUnknownContact(targetId);
+    
+    callUi.status.innerText = `Чат с ${targetId} (ожидание P2P...)`;
     callUi.status.style.color = '#89b4fa';
     
-    loadChatHistory(targetId);
+    // Включаем поле ввода СРАЗУ, не дожидаясь WebRTC (Оффлайн-режим)
+    callUi.msgInput.disabled = false;
+    callUi.sendBtn.disabled = false;
+    callUi.msgInput.placeholder = "Напишите сообщение...";
     
-    initMedia('chat').then(async () => {
-        setupPeerConnection();
-        dataChannel = peerConnection.createDataChannel('chatAndFiles');
-        setupDataChannel();
-        
-        try {
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            // Отправляем специальный сигнал chat_offer (он будет обработан без звонка)
-            sendSignal(targetId, { type: 'chat_offer', targetId, offer, from: myId });
-            
-            // Если абонент не ответит за 10 секунд
-            ringTimeout = setTimeout(() => {
-                if (peerConnection && peerConnection.connectionState !== 'connected') {
-                    callUi.status.innerText = "Абонент не в сети";
-                    callUi.status.style.color = "#f38ba8";
-                    setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 3000);
-                }
-            }, 10000); 
-        } catch(e) {
-            console.error("Ошибка старта чата", e);
-        }
-    });
+    loadChatHistory(targetId);
+    initMedia('chat');
+    
+    // Пытаемся тихо установить P2P-туннель в фоне
+    setupPeerConnection();
+    dataChannel = peerConnection.createDataChannel('chatAndFiles');
+    setupDataChannel();
+    
+    peerConnection.createOffer().then(offer => {
+        peerConnection.setLocalDescription(offer);
+        sendSignal(targetId, { type: 'chat_offer', targetId, offer, from: myId });
+    }).catch(e => console.error(e));
+
     wakeUpControls();
 }
 
 function makeCall(targetIdStr, mode) {
-    // Если выбран чат, запускаем тихий алгоритм
     if (mode === 'chat') {
         startChat(targetIdStr);
         return;
@@ -520,6 +541,9 @@ function makeCall(targetIdStr, mode) {
     callMode = 'call'; switchTab('call');
     isCaller = true; 
     iceCandidateQueue = [];
+    
+    checkUnknownContact(targetId);
+    
     callUi.status.innerText = `Звоним ${targetId}...`;
     
     loadChatHistory(targetId);
@@ -528,7 +552,7 @@ function makeCall(targetIdStr, mode) {
         sendSignal(targetId, { type: 'ring', targetId, from: myId, callType: mode });
         playDialTone(); 
         ringTimeout = setTimeout(() => {
-            if (!peerConnection) {
+            if (!peerConnection || peerConnection.connectionState !== 'connected') {
                 stopDialTone(); playHangupTone(); 
                 callUi.status.innerText = "Нет ответа"; callUi.status.style.color = "#f38ba8";
                 setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 3000);
@@ -553,13 +577,50 @@ async function processIceQueue() {
 function connectSignaling() {
     if (!myId) return;
     if (sse) sse.close();
-    sse = new EventSource(`https://ntfy.sh/p2p_call_${myId}/sse`);
+    // Подключаемся с параметром since=12h, чтобы получать оффлайн-сообщения, пока приложение было закрыто
+    sse = new EventSource(`https://ntfy.sh/p2p_call_${myId}/sse?since=12h`);
 
     sse.onmessage = async (e) => {
         const payload = JSON.parse(e.data);
         if (payload.event !== 'message') return; 
         let msg; try { msg = JSON.parse(payload.message); } catch (err) { return; }
         if (msg.from === myId) return;
+
+        // Фильтр старых системных сообщений (например, звонков, которые были 2 минуты назад)
+        const isOldMessage = msg.timestamp && (Date.now() - msg.timestamp > 60000);
+
+        // --- ОБРАБОТКА ОФФЛАЙН-СООБЩЕНИЙ ---
+        if (msg.type === 'direct_msg') {
+            let history = store.get(`chat_${msg.from}`) || [];
+            // Проверка на дубли (ntfy может прислать сообщение повторно при переподключении)
+            const alreadyExists = history.some(m => m.id === msg.id);
+            if (!alreadyExists) {
+                checkUnknownContact(msg.from);
+                history.push({ id: msg.id, text: msg.text, isMine: false, isHtml: false, timestamp: msg.timestamp });
+                if (history.length > 100) history.shift();
+                store.set(`chat_${msg.from}`, history);
+
+                // Если мы сейчас находимся в чате с этим пользователем
+                if (callMode !== 'idle' && targetId === msg.from) {
+                    appendMsg(msg.text, false, false, false, null, msg.id); // false = не сохранять снова
+                    playMessageSound();
+                } else {
+                    // Уведомляем пользователя о новом сообщении
+                    if (document.getElementById('call-view').classList.contains('active') === false) {
+                        document.getElementById('btn-call').innerText = "🖥️ Вызов 🔴";
+                    }
+                    playMessageSound();
+                    if (window.Notification && Notification.permission === 'granted' && document.hidden) {
+                        const notif = new Notification("Новое сообщение", { body: msg.text });
+                        notif.onclick = function() { window.focus(); this.close(); };
+                    }
+                }
+            }
+            return; // Оффлайн сообщение обработано, дальше идти не нужно
+        }
+
+        // Если это старый звонок или старый маршрут — игнорируем, чтобы не звонить в пустоту
+        if (isOldMessage) return;
 
         logSys(`Сигнал: [${msg.type}]`);
         if (ringTimeout) clearTimeout(ringTimeout);
@@ -575,9 +636,16 @@ function connectSignaling() {
             currentCallMode = 'chat';
             isCaller = false;
             iceCandidateQueue = [];
+            
+            checkUnknownContact(targetId);
 
             loadChatHistory(targetId);
             initMedia('chat'); 
+            
+            // Открываем ввод для ответа
+            callUi.msgInput.disabled = false;
+            callUi.sendBtn.disabled = false;
+            callUi.msgInput.placeholder = "Напишите сообщение...";
             
             setupPeerConnection();
             
@@ -592,13 +660,14 @@ function connectSignaling() {
             }
             return;
         }
-        // ----------------------------------------
 
         if (msg.type === 'ring' && callMode === 'idle') {
             targetId = msg.from; callMode = 'incoming';
             currentCallMode = msg.callType || 'video';
             isCaller = false;
             iceCandidateQueue = [];
+            
+            checkUnknownContact(targetId);
             
             let typeText = currentCallMode === 'video' ? '📹 Видеозвонок' : (currentCallMode === 'audio' ? '📞 Голосовой звонок' : '💬 Текстовый чат');
             if (window.Notification && Notification.permission === 'granted' && document.hidden) {
@@ -614,15 +683,22 @@ function connectSignaling() {
             callUi.incomingOverlay.style.display = 'flex';
             playRingtone();
         } else if (msg.type === 'ring' && callMode !== 'idle') {
-            // Если мы уже говорим, отбиваем звонок как "Занят"
             sendSignal(msg.from, { type: 'reject', targetId: msg.from, from: myId, reason: 'busy' });
         }
 
-        if (msg.type === 'cancel' && callMode === 'incoming') {
+        if (msg.type === 'cancel') {
             stopRingtone();
-            document.getElementById('incoming-ring-ui').style.display = 'none';
-            document.getElementById('incoming-canceled-ui').style.display = 'block';
-            setTimeout(() => { callUi.incomingOverlay.style.display = 'none'; resetCallUI(); }, 2500);
+            if (callMode === 'incoming') {
+                document.getElementById('incoming-ring-ui').style.display = 'none';
+                document.getElementById('incoming-canceled-ui').style.display = 'block';
+                setTimeout(() => { callUi.incomingOverlay.style.display = 'none'; resetCallUI(); }, 2500);
+            } else if (callMode === 'call' || callMode === 'answer') {
+                stopDialTone();
+                playHangupTone();
+                callUi.status.innerText = "Собеседник завершил вызов";
+                callUi.status.style.color = "#f38ba8";
+                setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 2000);
+            }
         }
 
         if (msg.type === 'accept' && callMode === 'call') {
@@ -647,7 +723,6 @@ function connectSignaling() {
         if (msg.type === 'offer') {
             if (!peerConnection) setupPeerConnection();
             
-            // Если идет конфликт предложений, уступает принимающая сторона
             if (peerConnection.signalingState !== "stable" && !isCaller) {
                 return; 
             }
@@ -667,6 +742,7 @@ function connectSignaling() {
 
         if (msg.type === 'candidate' && peerConnection) {
             try {
+                if (!msg.candidate) return;
                 const candidate = new RTCIceCandidate(msg.candidate);
                 if (peerConnection.remoteDescription && peerConnection.remoteDescription.type) {
                     await peerConnection.addIceCandidate(candidate);
@@ -706,7 +782,11 @@ function setupPeerConnection() {
 
     if (localStream) localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
-    peerConnection.onicecandidate = (e) => { if (e.candidate) sendSignal(targetId, { type: 'candidate', targetId, candidate: e.candidate }); };
+    peerConnection.onicecandidate = (e) => { 
+        if (e.candidate) {
+            sendSignal(targetId, { type: 'candidate', targetId, candidate: e.candidate }); 
+        }
+    };
     
     peerConnection.ontrack = (e) => { 
         if (!callUi.remoteVideo.srcObject || callUi.remoteVideo.srcObject.id !== e.streams[0].id) {
@@ -723,9 +803,12 @@ function setupPeerConnection() {
     peerConnection.ondatachannel = (e) => { dataChannel = e.channel; setupDataChannel(); };
     
     peerConnection.onconnectionstatechange = () => {
-        if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed') {
-            playHangupTone(); callUi.status.innerText = "Собеседник отключился"; callUi.status.style.color = "#f38ba8";
+        if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'closed') {
+            playHangupTone();
+            callUi.status.innerText = "Связь прервана";
+            callUi.status.style.color = "#f38ba8";
             callUi.placeholder.style.display = 'flex';
+            setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 2000);
         }
     };
 }
@@ -734,6 +817,8 @@ function setupDataChannel() {
     dataChannel.onopen = () => {
         playSuccessTone(); callUi.status.innerText = "✅ P2P соединение установлено"; callUi.status.style.color = "#a6e3a1"; 
         callUi.msgInput.disabled = false; callUi.sendBtn.disabled = false; 
+        
+        // Включаем кнопку загрузки файлов только после установки P2P соединения
         callUi.fileLabel.style.opacity = '0.8'; callUi.fileLabel.style.pointerEvents = 'auto';
     };
     
@@ -741,9 +826,8 @@ function setupDataChannel() {
         const msg = JSON.parse(e.data);
         if (msg.type === 'text') { 
             playMessageSound(); 
-            appendMsg(msg.text, false, false, true); 
+            appendMsg(msg.text, false, false, true, null, msg.id); 
             
-            // --- УВЕДОМЛЕНИЕ И КРАСНАЯ ТОЧКА ЕСЛИ МЫ НЕ В ЧАТЕ ---
             if (document.getElementById('call-view').classList.contains('active') === false) {
                 document.getElementById('btn-call').innerText = "🖥️ Вызов 🔴";
             }
@@ -752,7 +836,6 @@ function setupDataChannel() {
                 const notif = new Notification("Новое сообщение", { body: msg.text });
                 notif.onclick = function() { window.focus(); this.close(); };
             }
-            // -----------------------------------------------------
         } 
         else if (msg.type === 'file-start') {
             incomingFileInfo = msg; fileReceiveBuffer = [];
@@ -775,7 +858,8 @@ function setupDataChannel() {
 
 callUi.fileInput.addEventListener('change', () => {
     const file = callUi.fileInput.files[0];
-    if (!file || dataChannel?.readyState !== 'open') return;
+    if (!file) return;
+    if (dataChannel?.readyState !== 'open') return alert("Дождитесь установки P2P соединения для передачи файлов!");
     if (file.size > 20 * 1024 * 1024) return alert("Максимум 20 МБ");
 
     const reader = new FileReader();
@@ -901,11 +985,12 @@ document.getElementById('share-screen').onclick = async function() {
 };
 
 callUi.hangupBtn.onclick = () => {
-    if (callMode === 'call' && (!peerConnection || peerConnection.connectionState !== 'connected')) {
+    if (callMode !== 'idle') {
         sendSignal(targetId, { type: 'cancel', targetId, from: myId });
     }
     playHangupTone();
-    setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 1500); 
+    callUi.status.innerText = "Завершение...";
+    setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 1000); 
 };
 
 function setupVideoSwap() {
@@ -933,12 +1018,12 @@ function setupVideoSwap() {
 
 function escapeHTML(str) { return str.replace(/[&<>'"]/g, tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)); }
 
-function appendMsg(text, isMine, isHtml = false, saveToHistory = true, rawTextForHistory = null) {
+function appendMsg(text, isMine, isHtml = false, saveToHistory = true, rawTextForHistory = null, msgId = null) {
     const div = document.createElement('div');
     div.className = `msg ${isMine ? 'msg-mine' : 'msg-peer'}`; div.innerHTML = isHtml ? text : escapeHTML(text);
     callUi.chatBox.appendChild(div); callUi.chatBox.scrollTop = callUi.chatBox.scrollHeight;
     if (saveToHistory) {
-        chatHistory.push({ text: rawTextForHistory || text, isMine, isHtml: false });
+        chatHistory.push({ id: msgId || Date.now().toString(), text: rawTextForHistory || text, isMine, isHtml: false, timestamp: Date.now() });
         if (chatHistory.length > 100) chatHistory.shift(); 
         store.set(`chat_${targetId}`, chatHistory);
     }
@@ -946,8 +1031,20 @@ function appendMsg(text, isMine, isHtml = false, saveToHistory = true, rawTextFo
 
 callUi.sendBtn.onclick = () => {
     const text = callUi.msgInput.value.trim();
-    if (text && dataChannel?.readyState === 'open') {
-        dataChannel.send(JSON.stringify({ type: 'text', text })); appendMsg(text, true, false, true); callUi.msgInput.value = '';
+    if (!text) return;
+
+    // Генерируем уникальный ID для сообщения
+    const msgId = Date.now().toString() + Math.random().toString(36).substring(2, 6);
+    
+    appendMsg(text, true, false, true, null, msgId); 
+    callUi.msgInput.value = '';
+
+    // Если P2P туннель уже установлен — шлем через него напрямую (быстро)
+    if (dataChannel?.readyState === 'open') {
+        dataChannel.send(JSON.stringify({ type: 'text', text: text, id: msgId }));
+    } else {
+        // Если P2P еще не установлен, шлем через сервер как оффлайн/асинхронное сообщение
+        sendSignal(targetId, { type: 'direct_msg', text: text, id: msgId, from: myId });
     }
 };
 callUi.msgInput.onkeypress = (e) => { if (e.key === 'Enter') callUi.sendBtn.onclick(); };

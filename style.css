@@ -1,0 +1,173 @@
+/* ========================================== */
+/* БАЗОВЫЕ СТИЛИ И СИСТЕМА ВКЛАДОК (ТАБОВ)    */
+/* ========================================== */
+* { box-sizing: border-box; }
+body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; height: 100dvh; background: #181825; color: #fff; display: flex; flex-direction: column; overflow: hidden; }
+
+.tab-bar { display: flex; background: #11111b; padding: 10px 20px; gap: 15px; border-bottom: 2px solid #313244; z-index: 1000; flex-shrink: 0; }
+.tab-btn { background: transparent; color: #a6adc8; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 15px; transition: all 0.2s; flex: 1; text-align: center; white-space: nowrap; }
+.tab-btn.active { background: #89b4fa; color: #11111b; }
+.tab-btn:hover:not(.active) { background: #313244; color: #cdd6f4; }
+
+.view-container { display: none; flex: 1; width: 100%; overflow: hidden; }
+.view-container.active { display: flex; }
+
+/* Кастомный скроллбар */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #45475a; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #585b70; }
+
+/* ========================================== */
+/* СТИЛИ ДЛЯ ВКЛАДКИ КОНТАКТОВ                */
+/* ========================================== */
+#contacts-view { background: #f0f2f5; color: #333; justify-content: center; align-items: flex-start; padding: 20px; overflow-y: auto; }
+.contacts-wrapper { width: 340px; max-width: 100%; margin: 0 auto; }
+
+.my-id-box { background: #e3f2fd; padding: 15px; border-radius: 10px; text-align: center; margin-bottom: 20px; border: 1px solid #bbdefb; position: relative; }
+.my-id-box .label { font-size: 11px; text-transform: uppercase; font-weight: bold; color: #1976d2; }
+.my-id-box strong { font-size: 28px; font-family: monospace; letter-spacing: 2px; color: #0d47a1; display: block; margin: 8px 0; }
+
+.add-box { background: #fff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 20px; }
+.add-box h3 { margin: 0 0 10px 0; font-size: 14px; }
+.add-box input { width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; text-transform: uppercase; transition: border-color 0.2s; }
+.add-box input:focus { outline: none; border-color: #1976d2; }
+.add-box button { width: 100%; padding: 10px; background: #1976d2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+.add-box button:hover { background: #1565c0; }
+
+.contacts-list-container { background: #fff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+.contacts-list-container h3 { font-size: 14px; margin: 0 0 10px 0; display: flex; justify-content: space-between; align-items: center; }
+#contacts-list { list-style: none; padding: 0; margin: 0; max-height: 40vh; overflow-y: auto; padding-right: 5px; }
+#contacts-list li { 
+    background: #fafafa; border: 1px solid #eee; border-radius: 8px; margin-bottom: 8px; 
+    position: relative; overflow: hidden; cursor: pointer;
+}
+.contact-content { 
+    display: flex; justify-content: space-between; align-items: center; gap: 10px; 
+    padding: 12px 40px 12px 12px; width: 100%; transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.contact-info { display: flex; flex-direction: column; overflow: hidden; flex: 1; pointer-events: none; }
+.contact-name { font-weight: bold; font-size: 14px; text-transform: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.contact-id { font-size: 12px; color: #666; font-family: monospace; }
+.contact-actions { display: flex; gap: 4px; }
+
+.call-action-btn { min-width: 32px; height: 32px; border-radius: 8px; font-size: 14px; display: flex; align-items: center; justify-content: center; border: 1px solid transparent; cursor: pointer; transition: background 0.2s; }
+.btn-call-video { background: #e3f2fd; color: #1976d2; border-color: #bbdefb; }
+.btn-call-video:hover { background: #bbdefb; }
+.btn-call-audio { background: #e8f5e9; color: #2e7d32; border-color: #c8e6c9; }
+.btn-call-audio:hover { background: #c8e6c9; }
+.btn-call-chat { background: #f3e5f5; color: #7b1fa2; border-color: #e1bee7; }
+.btn-call-chat:hover { background: #e1bee7; }
+
+.del-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 40px; display: flex; align-items: center; justify-content: center; color: #ccc; font-weight: bold; transition: opacity 0.2s; cursor: pointer; z-index: 5; }
+.del-handle:hover { color: #888; background: rgba(0,0,0,0.02); }
+
+/* Измененная скрытая панель с двумя кнопками */
+.swipe-actions { position: absolute; right: -100px; top: 0; bottom: 0; display: flex; transition: right 0.25s cubic-bezier(0.4, 0, 0.2, 1); z-index: 10; }
+.btn-edit, .btn-del { width: 50px; border: none; font-size: 16px; display: flex; align-items: center; justify-content: center; cursor: pointer; margin: 0; transition: background 0.2s; }
+.btn-edit { background: #fff8e1; color: #f57f17; border-left: 1px solid #ffecb3; }
+.btn-edit:hover { background: #ffecb3; }
+.btn-del { background: #ffebee; color: #c62828; border-left: 1px solid #ffcdd2; }
+.btn-del:hover { background: #ffcdd2; }
+
+/* Открываем панель ТОЛЬКО по клику/тапу или свайпу (через добавление класса show-actions скриптом) */
+#contacts-list li.show-actions .contact-content { transform: translateX(-100px); }
+#contacts-list li.show-actions .swipe-actions { right: 0; }
+#contacts-list li.show-actions .del-handle { opacity: 0; pointer-events: none; }
+
+/* Окно настроек (Модалка) */
+#settings-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 10000; align-items: center; justify-content: center; padding: 20px; }
+.settings-content { background: #fff; padding: 20px; border-radius: 12px; width: 100%; max-width: 320px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); color: #333; }
+#test-video { width: 100%; height: auto; aspect-ratio: 4/3; background: #000; border-radius: 8px; object-fit: cover; margin-bottom: 15px; transform: scaleX(-1); }
+.mic-bar-bg { width: 100%; height: 12px; background: #eee; border-radius: 6px; overflow: hidden; margin-bottom: 20px; border: 1px solid #ccc; }
+#mic-level { height: 100%; width: 0%; background: #4caf50; transition: width 0.1s ease-out; }
+
+/* ========================================== */
+/* СТИЛИ ДЛЯ ВКЛАДКИ ЗВОНКА И ЧАТА            */
+/* ========================================== */
+#call-view { background: #1e1e2e; flex-direction: column; padding: 15px; gap: 15px; overflow: hidden; position: relative; }
+.call-header { display: flex; justify-content: space-between; align-items: center; background: #2a2a3f; padding: 10px 15px; border-radius: 12px; flex-shrink: 0; z-index: 50; }
+.call-header h1 { margin: 0; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 8px; }
+.e2e-badge { font-size: 10px; background: #a6e3a1; color: #1e1e2e; padding: 3px 6px; border-radius: 4px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; }
+.status { color: #89b4fa; font-size: 13px; margin-top: 2px; font-weight: bold; }
+
+/* Main Container: position relative to hold floating controls, padding-bottom provides space so chat isn't hidden behind buttons */
+.main-container { display: flex; flex: 1; gap: 15px; min-height: 0; flex-direction: row; position: relative; padding-bottom: 50px; }
+
+.video-panel { flex: 3; background: #000; border-radius: 12px; position: relative; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+#remote-video { width: 100%; height: 100%; object-fit: contain; }
+#local-video { position: absolute; bottom: 15px; right: 15px; width: 120px; height: auto; border-radius: 8px; border: 2px solid #444; background: #222; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 10; transform: scaleX(-1); }
+.placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #888; font-size: 16px; background: #111; z-index: 5; text-align: center; padding: 20px; }
+
+/* Панель контроллеров вынесена наружу, всегда видна и лежит поверх (z-index) */
+.controls { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; background: rgba(30, 30, 46, 0.85); padding: 8px 12px; border-radius: 30px; z-index: 100; backdrop-filter: blur(8px); flex-wrap: nowrap; justify-content: center; width: max-content; max-width: 95%; overflow-x: auto; border: 1px solid rgba(255,255,255,0.1); transition: opacity 0.4s ease, transform 0.4s ease; opacity: 1; }
+.ctrl-btn { background: #444; color: white; border: none; padding: 8px 12px; border-radius: 20px; cursor: pointer; font-weight: bold; transition: background 0.2s, opacity 0.2s; display: flex; align-items: center; gap: 5px; font-size: 13px; white-space: nowrap; }
+.ctrl-btn:hover { background: #555; }
+.btn-hangup { background: #f38ba8; color: #1e1e2e; }
+.btn-hangup:hover { background: #e06c8b; }
+
+.chat-panel { flex: 2; background: #2a2a3f; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #45475a; }
+#chat-box { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.msg { padding: 8px 12px; border-radius: 12px; font-size: 14px; max-width: 85%; word-wrap: break-word; line-height: 1.4; }
+.msg-mine { background: #89b4fa; color: #1e1e2e; align-self: flex-end; border-bottom-right-radius: 2px; }
+.msg-peer { background: #45475a; color: #fff; align-self: flex-start; border-bottom-left-radius: 2px; }
+
+#file-progress-container { display: none; padding: 8px 12px; background: #313244; border-top: 1px solid #45475a; font-size: 12px; }
+#file-progress-bar-bg { width: 100%; height: 6px; background: #1e1e2e; border-radius: 3px; margin-top: 5px; overflow: hidden; }
+#file-progress-bar { width: 0%; height: 100%; background: #a6e3a1; transition: width 0.2s; }
+
+.input-area { display: flex; padding: 10px 15px; background: #1e1e2e; border-top: 1px solid #45475a; gap: 8px; align-items: center; flex-shrink: 0; }
+.input-area input[type="text"] { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #45475a; background: #313244; color: #fff; outline: none; font-size: 14px; text-transform: none; min-width: 0; }
+.input-area input[type="text"]:focus { border-color: #89b4fa; }
+.input-area input[type="text"]:disabled { opacity: 0.5; cursor: not-allowed; }
+#send-btn { background: #89b4fa; color: #1e1e2e; border: none; padding: 0 15px; height: 100%; border-radius: 8px; cursor: pointer; font-weight: bold; transition: opacity 0.2s; display: flex; align-items: center; justify-content: center; }
+#send-btn:hover:not(:disabled) { background: #b4befe; }
+#send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ========================================== */
+/* ПЕРЕКРЫВАЮЩИЙ ЭКРАН ВХОДЯЩЕГО ЗВОНКА       */
+/* ========================================== */
+@keyframes ring-shake { 0% { transform: rotate(-15deg) scale(1); } 100% { transform: rotate(15deg) scale(1.1); } }
+#incoming-overlay { display: none; position: fixed; inset: 0; background: rgba(30, 30, 46, 0.98); z-index: 9999; flex-direction: column; align-items: center; justify-content: center; color: #fff; padding: 20px; text-align: center; }
+.call-btn-acc, .call-btn-rej { border: none; padding: 15px 30px; border-radius: 30px; font-size: 16px; font-weight: bold; cursor: pointer; transition: transform 0.2s; flex: 1; max-width: 160px; }
+.call-btn-acc { background: #a6e3a1; color: #1e1e2e; box-shadow: 0 4px 15px rgba(166,227,161,0.4); }
+.call-btn-rej { background: #f38ba8; color: #1e1e2e; box-shadow: 0 4px 15px rgba(243,139,168,0.4); }
+.call-btn-acc:hover, .call-btn-rej:hover { transform: scale(1.05); }
+
+/* ========================================== */
+/* АДАПТИВНОСТЬ ДЛЯ ТЕЛЕФОНОВ (MOBILE)        */
+/* ========================================== */
+@media (max-width: 768px) {
+    .tab-bar { padding: 8px 10px; gap: 10px; }
+    .tab-btn { padding: 8px 10px; font-size: 13px; }
+    
+    #call-view { padding: 10px; gap: 10px; }
+    .call-header { padding: 8px 12px; }
+    .call-header h1 { font-size: 16px; }
+    
+    /* На мобильных располагаем видео сверху, чат снизу */
+    .main-container { flex-direction: column; gap: 10px; padding-bottom: 50px; }
+    
+    /* Фиксируем высоту видео, чтобы чат не исчезал */
+    .video-panel { flex: none; height: 40dvh; min-height: 220px; max-height: 50vh; }
+    
+    #local-video { width: 80px; bottom: 15px; right: 10px; border-width: 1px; }
+    .controls { padding: 6px 10px; gap: 5px; width: auto; max-width: calc(100% - 20px); bottom: 0; }
+    .ctrl-btn { padding: 6px 10px; font-size: 11px; gap: 4px; }
+    
+    .chat-panel { flex: 1; min-height: 150px; }
+    
+    /* Делаем иконки на кнопках вместо текста для экономии места, где это возможно */
+    #toggle-mic { font-size: 0; }
+    #toggle-mic::before { content: "🎤"; font-size: 14px; }
+    #toggle-cam { font-size: 0; }
+    #toggle-cam::before { content: "📹"; font-size: 14px; }
+    #share-screen { font-size: 0; }
+    #share-screen::before { content: "💻"; font-size: 14px; }
+    .btn-hangup { font-size: 0; }
+    .btn-hangup::before { content: "☎"; font-size: 14px; }
+
+    #incoming-overlay > div { width: 100%; }
+    #incoming-overlay .call-buttons { display: flex; flex-direction: column; gap: 15px; align-items: center; margin-top: 30px; }
+    .call-btn-acc, .call-btn-rej { width: 100%; max-width: 250px; }
+}

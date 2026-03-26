@@ -51,9 +51,14 @@
         .contact-info { display: flex; flex-direction: column; overflow: hidden; flex: 1; }
         .contact-name { font-weight: bold; font-size: 14px; text-transform: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .contact-id { font-size: 12px; color: #666; font-family: monospace; }
-        .btn-call { background: #e8f5e9; color: #2e7d32; min-width: 32px; height: 32px; border-radius: 8px; font-size: 14px; display: flex; align-items: center; justify-content: center; border: 1px solid #c8e6c9; cursor: pointer; transition: background 0.2s; }
-        .btn-call:hover { background: #c8e6c9; }
-        .btn-del { background: #ffebee; color: #c62828; min-width: 32px; height: 32px; border-radius: 8px; font-size: 14px; display: flex; align-items: center; justify-content: center; border: 1px solid #ffcdd2; cursor: pointer; transition: background 0.2s; }
+        .call-action-btn { min-width: 32px; height: 32px; border-radius: 8px; font-size: 14px; display: flex; align-items: center; justify-content: center; border: 1px solid transparent; cursor: pointer; transition: background 0.2s; }
+        .btn-call-video { background: #e3f2fd; color: #1976d2; border-color: #bbdefb; }
+        .btn-call-video:hover { background: #bbdefb; }
+        .btn-call-audio { background: #e8f5e9; color: #2e7d32; border-color: #c8e6c9; }
+        .btn-call-audio:hover { background: #c8e6c9; }
+        .btn-call-chat { background: #f3e5f5; color: #7b1fa2; border-color: #e1bee7; }
+        .btn-call-chat:hover { background: #e1bee7; }
+        .btn-del { background: #ffebee; color: #c62828; border-color: #ffcdd2; }
         .btn-del:hover { background: #ffcdd2; }
 
         /* Окно настроек (Модалка) */
@@ -242,7 +247,7 @@
                 </div>
 
                 <div class="input-area">
-                    <label for="file-input" style="cursor: pointer; font-size: 20px; opacity: 0.8; flex-shrink: 0;" title="Отправить файл">📎</label>
+                    <label id="file-label" for="file-input" style="cursor: pointer; font-size: 20px; opacity: 0.5; pointer-events: none; flex-shrink: 0;" title="Отправить файл">📎</label>
                     <input type="file" id="file-input" style="display: none;">
                     <input type="text" id="msg-input" placeholder="Напишите..." disabled>
                     <button id="send-btn" disabled>➤</button>
@@ -272,7 +277,8 @@
     <!-- Входящий звонок -->
     <div id="incoming-overlay">
         <div id="incoming-ring-ui" style="text-align: center; width: 100%;">
-            <div style="font-size: 60px; margin-bottom: 20px; animation: ring-shake 0.8s infinite alternate;">📞</div>
+            <div style="font-size: 60px; margin-bottom: 10px; animation: ring-shake 0.8s infinite alternate;">📞</div>
+            <div id="incoming-call-type" style="font-size: 16px; color: #a6e3a1; margin-bottom: 10px; font-weight: bold; text-transform: uppercase;">📹 ВИДЕОЗВОНОК</div>
             <div style="font-size: 24px;">Вам звонит:</div>
             <div id="incoming-caller-id" style="font-size: 36px; font-family: monospace; color: #89b4fa; font-weight: bold; letter-spacing: 2px;">------</div>
             <div class="call-buttons" style="display: flex; gap: 20px; margin-top: 30px; justify-content: center;">
@@ -307,6 +313,7 @@
 
         let sse, peerConnection, dataChannel, localStream, screenStream;
         let myId, targetId, callMode = 'idle';
+        let currentCallMode = 'video';
         let ringTimeout, chatHistory = [];
         let isScreenSharing = false, isVideoSwapped = false;
         const CHUNK_SIZE = 16384; 
@@ -323,6 +330,7 @@
             chatBox: document.getElementById('chat-box'),
             msgInput: document.getElementById('msg-input'),
             sendBtn: document.getElementById('send-btn'),
+            fileLabel: document.getElementById('file-label'),
             hangupBtn: document.getElementById('hangup-btn'),
             incomingOverlay: document.getElementById('incoming-overlay'),
             incomingCallerId: document.getElementById('incoming-caller-id'),
@@ -431,15 +439,17 @@
                         <span class="contact-id">ID: ${c.id}</span>
                     </div>
                     <div style="display: flex; gap: 4px;">
-                        <button class="btn-call" data-id="${c.id}" title="Позвонить">📞</button>
-                        <button class="btn-del" data-index="${index}" title="Удалить">✕</button>
+                        <button class="call-action-btn btn-call-video" data-id="${c.id}" data-mode="video" title="Видеозвонок">📹</button>
+                        <button class="call-action-btn btn-call-audio" data-id="${c.id}" data-mode="audio" title="Голосовой звонок">📞</button>
+                        <button class="call-action-btn btn-call-chat" data-id="${c.id}" data-mode="chat" title="Только чат">💬</button>
+                        <button class="call-action-btn btn-del" data-index="${index}" title="Удалить">✕</button>
                     </div>
                 `;
                 list.appendChild(li);
             });
 
-            document.querySelectorAll('.btn-call').forEach(btn => btn.addEventListener('click', (e) => {
-                makeCall(e.currentTarget.getAttribute('data-id'));
+            document.querySelectorAll('.btn-call-video, .btn-call-audio, .btn-call-chat').forEach(btn => btn.addEventListener('click', (e) => {
+                makeCall(e.currentTarget.getAttribute('data-id'), e.currentTarget.getAttribute('data-mode'));
             }));
             document.querySelectorAll('.btn-del').forEach(btn => btn.addEventListener('click', (e) => {
                 contacts.splice(e.currentTarget.getAttribute('data-index'), 1);
@@ -555,6 +565,7 @@
             callUi.placeholder.style.display = 'flex'; callUi.status.innerText = 'Ожидание действий...';
             callUi.status.style.color = '#89b4fa';
             callUi.msgInput.disabled = true; callUi.sendBtn.disabled = true;
+            callUi.fileLabel.style.opacity = '0.5'; callUi.fileLabel.style.pointerEvents = 'none';
             
             // Сброс свапа видео
             isVideoSwapped = false;
@@ -569,27 +580,47 @@
             chatHistory.forEach(msg => appendMsg(msg.text, msg.isMine, msg.isHtml, false));
         }
 
-        async function initMedia() {
+        async function initMedia(mode) {
+            callUi.localVideo.style.display = mode === 'video' ? 'block' : 'none';
+            callUi.remoteVideo.style.display = mode === 'video' ? 'block' : 'none';
+            document.getElementById('toggle-cam').style.display = mode === 'video' ? 'flex' : 'none';
+            document.getElementById('share-screen').style.display = mode === 'video' ? 'flex' : 'none';
+            document.getElementById('toggle-mic').style.display = (mode === 'video' || mode === 'audio') ? 'flex' : 'none';
+            
+            callUi.placeholder.innerText = mode === 'video' ? 'Ожидание подключения...' : (mode === 'audio' ? '📞 Разговор активен...' : '💬 Только чат...');
+
+            if (mode === 'chat') {
+                logSys("Выбран текстовый режим (без медиа).");
+                return;
+            }
+
             try {
-                // Добавлено facingMode: 'user' для мобильных
-                localStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true });
-                callUi.localVideo.srcObject = localStream; callUi.localVideo.style.transform = 'scaleX(-1)';
-                logSys("Камера и микрофон активны");
+                const constraints = {
+                    audio: true,
+                    video: mode === 'video' ? { facingMode: "user" } : false
+                };
+                localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                if (mode === 'video') {
+                    callUi.localVideo.srcObject = localStream; 
+                    callUi.localVideo.style.transform = 'scaleX(-1)';
+                }
+                logSys(`Медиа устройства активны (${mode})`);
             } catch (e) { 
-                logSys("⚠️ Ошибка: Доступ к камере/микрофону запрещен браузером. Откройте настройки сайта (иконка замка 🔒 в адресной строке) и разрешите доступ."); 
-                alert("Не удалось получить доступ к камере или микрофону!\n\nЕсли вы запретили доступ ранее или случайно закрыли окно, браузер больше не покажет запрос автоматически.\n\nВам нужно нажать на иконку замка 🔒 рядом с адресом сайта, вручную разрешить камеру и микрофон, а затем обновить страницу.");
+                logSys("⚠️ Ошибка: Доступ к медиа запрещен. Переход в текстовый режим."); 
+                alert("Не удалось получить доступ к микрофону/камере!\nПроверьте разрешения (иконка замка 🔒). Звонок будет только в текстовом режиме.");
             }
         }
 
-        function makeCall(targetIdStr) {
+        function makeCall(targetIdStr, mode) {
             targetId = targetIdStr.toUpperCase();
+            currentCallMode = mode;
             callMode = 'call'; switchTab('call');
             callUi.status.innerText = `Звоним ${targetId}...`;
             
             loadChatHistory(targetId);
             
-            initMedia().then(() => {
-                sendSignal(targetId, { type: 'ring', targetId, from: myId });
+            initMedia(mode).then(() => {
+                sendSignal(targetId, { type: 'ring', targetId, from: myId, callType: mode });
                 playDialTone(); 
                 ringTimeout = setTimeout(() => {
                     if (!peerConnection) {
@@ -617,9 +648,15 @@
 
                 if (msg.type === 'ring' && callMode === 'idle') {
                     targetId = msg.from; callMode = 'incoming';
+                    currentCallMode = msg.callType || 'video';
+                    
                     document.getElementById('incoming-ring-ui').style.display = 'block';
                     document.getElementById('incoming-canceled-ui').style.display = 'none';
                     callUi.incomingCallerId.innerText = targetId;
+                    
+                    let typeText = currentCallMode === 'video' ? '📹 Видеозвонок' : (currentCallMode === 'audio' ? '📞 Голосовой звонок' : '💬 Текстовый чат');
+                    document.getElementById('incoming-call-type').innerText = typeText;
+
                     callUi.incomingOverlay.style.display = 'flex';
                     playRingtone();
                 }
@@ -672,7 +709,7 @@
             stopRingtone(); callUi.incomingOverlay.style.display = 'none'; callMode = 'answer'; switchTab('call');
             callUi.status.innerText = `Соединение с ${targetId}...`;
             sendSignal(targetId, { type: 'accept', targetId, from: myId });
-            loadChatHistory(targetId); await initMedia(); setupVideoSwap();
+            loadChatHistory(targetId); await initMedia(currentCallMode); setupVideoSwap();
         };
 
         document.getElementById('reject-call-btn').onclick = () => {
@@ -687,7 +724,12 @@
             if (localStream) localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
             peerConnection.onicecandidate = (e) => { if (e.candidate) sendSignal(targetId, { type: 'candidate', targetId, candidate: e.candidate }); };
-            peerConnection.ontrack = (e) => { callUi.remoteVideo.srcObject = e.streams[0]; callUi.placeholder.style.display = 'none'; };
+            peerConnection.ontrack = (e) => { 
+                if (currentCallMode === 'video') {
+                    callUi.remoteVideo.srcObject = e.streams[0]; 
+                    callUi.placeholder.style.display = 'none'; 
+                }
+            };
             peerConnection.ondatachannel = (e) => { dataChannel = e.channel; setupDataChannel(); };
             
             peerConnection.onconnectionstatechange = () => {
@@ -702,6 +744,7 @@
             dataChannel.onopen = () => {
                 playSuccessTone(); callUi.status.innerText = "✅ P2P соединение установлено"; callUi.status.style.color = "#a6e3a1"; 
                 callUi.msgInput.disabled = false; callUi.sendBtn.disabled = false; 
+                callUi.fileLabel.style.opacity = '0.8'; callUi.fileLabel.style.pointerEvents = 'auto';
             };
             
             dataChannel.onmessage = (e) => {

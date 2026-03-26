@@ -231,6 +231,7 @@
                 <div class="controls">
                     <button class="ctrl-btn" id="toggle-mic">Микрофон</button>
                     <button class="ctrl-btn" id="toggle-cam">Камера</button>
+                    <button class="ctrl-btn" id="switch-cam" title="Переключить камеру">🔄</button>
                     <button class="ctrl-btn" id="share-screen" style="background: #a6e3a1; color: #1e1e2e;">Экран</button>
                     <button class="ctrl-btn btn-hangup" id="hangup-btn">Сброс</button>
                 </div>
@@ -265,7 +266,8 @@
         <div class="settings-content">
             <h3 style="margin-top:0;">Проверка связи ⚙️</h3>
             <video id="test-video" autoplay playsinline muted></video>
-            <div style="font-size: 11px; font-weight: bold; margin-bottom: 4px; color: #555;">Микрофон:</div>
+            <button id="settings-switch-cam" style="display: none; width: 100%; padding: 8px; background: #e3f2fd; color: #1976d2; border: 1px solid #bbdefb; border-radius: 6px; cursor: pointer; margin-bottom: 15px; font-size: 13px; font-weight: bold;">🔄 Сменить камеру</button>
+            <div style="font-size: 11px; font-weight: bold; margin-bottom: 4px; color: #555;">Проверка микрофона (скажите что-нибудь):</div>
             <div class="mic-bar-bg"><div id="mic-level"></div></div>
             <p style="font-size: 11px; color: #666; margin-top:0;">* На телефонах камера работает только если сайт открыт по HTTPS.</p>
             <div id="cam-error-msg" style="display: none; color: #f44336; font-size: 12px; margin-bottom: 10px; font-weight: bold; text-align: center; background: #ffebee; padding: 8px; border-radius: 6px;"></div>
@@ -314,6 +316,7 @@
         let sse, peerConnection, dataChannel, localStream, screenStream;
         let myId, targetId, callMode = 'idle';
         let currentCallMode = 'video';
+        let currentFacingMode = 'user'; // Режим камеры по умолчанию (фронтальная)
         let ringTimeout, chatHistory = [];
         let isScreenSharing = false, isVideoSwapped = false;
         const CHUNK_SIZE = 16384; 
@@ -494,9 +497,11 @@
         async function requestMediaPermissions() {
             document.getElementById('cam-error-msg').style.display = 'none';
             try {
-                // Добавлено facingMode: 'user' для фронтальной камеры телефона
-                testStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true });
+                testStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacingMode }, audio: true });
                 document.getElementById('test-video').srcObject = testStream;
+                document.getElementById('test-video').style.transform = currentFacingMode === 'user' ? 'scaleX(-1)' : 'none';
+                document.getElementById('settings-switch-cam').style.display = 'block';
+                
                 const source = audioCtx.createMediaStreamSource(testStream);
                 analyzer = audioCtx.createAnalyser(); analyzer.fftSize = 256; source.connect(analyzer);
                 const dataArray = new Uint8Array(analyzer.frequencyBinCount);
@@ -584,6 +589,7 @@
             callUi.localVideo.style.display = mode === 'video' ? 'block' : 'none';
             callUi.remoteVideo.style.display = mode === 'video' ? 'block' : 'none';
             document.getElementById('toggle-cam').style.display = mode === 'video' ? 'flex' : 'none';
+            document.getElementById('switch-cam').style.display = mode === 'video' ? 'flex' : 'none';
             document.getElementById('share-screen').style.display = mode === 'video' ? 'flex' : 'none';
             document.getElementById('toggle-mic').style.display = (mode === 'video' || mode === 'audio') ? 'flex' : 'none';
             
@@ -597,12 +603,12 @@
             try {
                 const constraints = {
                     audio: true,
-                    video: mode === 'video' ? { facingMode: "user" } : false
+                    video: mode === 'video' ? { facingMode: currentFacingMode } : false
                 };
                 localStream = await navigator.mediaDevices.getUserMedia(constraints);
                 if (mode === 'video') {
                     callUi.localVideo.srcObject = localStream; 
-                    callUi.localVideo.style.transform = 'scaleX(-1)';
+                    callUi.localVideo.style.transform = currentFacingMode === 'user' ? 'scaleX(-1)' : 'none';
                 }
                 logSys(`Медиа устройства активны (${mode})`);
             } catch (e) { 
@@ -793,6 +799,37 @@
             };
             reader.readAsDataURL(file); 
         });
+
+        // Функция переключения камеры (фронтальная/задняя)
+        async function switchCameraTrack(streamHolder, videoElement, isCall) {
+            if (!streamHolder) return;
+            currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+            try {
+                const oldVideoTrack = streamHolder.getVideoTracks()[0];
+                if (oldVideoTrack) oldVideoTrack.stop();
+
+                const newStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacingMode } });
+                const newVideoTrack = newStream.getVideoTracks()[0];
+
+                streamHolder.removeTrack(oldVideoTrack);
+                streamHolder.addTrack(newVideoTrack);
+
+                videoElement.srcObject = streamHolder;
+                videoElement.style.transform = currentFacingMode === 'user' ? 'scaleX(-1)' : 'none';
+
+                if (isCall && peerConnection) {
+                    const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+                    if (sender) sender.replaceTrack(newVideoTrack);
+                }
+                logSys(`Камера переключена (${currentFacingMode})`);
+            } catch (e) {
+                logSys("Ошибка переключения камеры");
+                currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user'; // откат
+            }
+        }
+
+        document.getElementById('settings-switch-cam').onclick = () => switchCameraTrack(testStream, document.getElementById('test-video'), false);
+        document.getElementById('switch-cam').onclick = () => switchCameraTrack(localStream, callUi.localVideo, true);
 
         // Кнопки управления в звонке
         document.getElementById('toggle-mic').onclick = function() {

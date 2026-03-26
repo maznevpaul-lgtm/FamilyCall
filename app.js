@@ -23,6 +23,10 @@ let isScreenSharing = false, isVideoSwapped = false;
 const CHUNK_SIZE = 16384; 
 let fileReceiveBuffer = [], incomingFileInfo = null;
 
+// Новые переменные для решения проблемы "гонки" и стабильного соединения
+let isCaller = false; 
+let iceCandidateQueue = [];
+
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 let dialInterval = null, ringInterval = null;
 
@@ -348,7 +352,11 @@ function resetCallUI() {
     document.getElementById('toggle-cam').style.opacity = '1';
     document.getElementById('toggle-cam').style.textDecoration = 'none';
     
+    // Очищаем переменные безопасности связи
     isVideoSwapped = false;
+    isCaller = false;
+    iceCandidateQueue = [];
+    
     callUi.localVideo.style = ''; callUi.remoteVideo.style = '';
     
     callMode = 'idle';
@@ -361,7 +369,18 @@ function loadChatHistory(id) {
     chatHistory.forEach(msg => appendMsg(msg.text, msg.isMine, msg.isHtml, false));
 }
 
-// Новая логика: динамический запрос устройства "на лету" без сброса соединения
+// Принудительная отправка ключей при добавлении медиа
+async function forceNegotiation() {
+    if (!peerConnection) return;
+    try {
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        sendSignal(targetId, { type: 'offer', targetId, offer, from: myId });
+    } catch (err) {
+        console.error("Ошибка при запросе соединения:", err);
+    }
+}
+
 async function getAndAddMedia(kind) {
     try {
         let stream;
@@ -374,12 +393,15 @@ async function getAndAddMedia(kind) {
             callUi.localVideo.srcObject = localStream;
             callUi.localVideo.style.transform = currentFacingMode === 'user' ? 'scaleX(-1)' : 'none';
             
-            // Если видео добавлено, открываем видео-панель
             document.querySelector('.video-panel').style.display = 'flex';
             callUi.localVideo.style.display = 'block';
             callUi.remoteVideo.style.display = 'block';
+            callUi.placeholder.style.display = 'none';
             
-            if (peerConnection) peerConnection.addTrack(videoTrack, localStream); // onnegotiationneeded отправит данные
+            if (peerConnection) {
+                peerConnection.addTrack(videoTrack, localStream); 
+                forceNegotiation();
+            }
             logSys("Камера включена.");
         } else if (kind === 'audio') {
             stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -387,7 +409,10 @@ async function getAndAddMedia(kind) {
             if (!localStream) localStream = new MediaStream();
             localStream.addTrack(audioTrack);
             
-            if (peerConnection) peerConnection.addTrack(audioTrack, localStream);
+            if (peerConnection) {
+                peerConnection.addTrack(audioTrack, localStream);
+                forceNegotiation();
+            }
             logSys("Микрофон включен.");
         }
     } catch (e) {
@@ -399,7 +424,6 @@ async function getAndAddMedia(kind) {
 async function initMedia(mode) {
     const videoPanel = document.querySelector('.video-panel');
 
-    // Если чат или аудио — прячем панель с видео, кнопки оставляем прозрачными
     if (mode === 'chat' || mode === 'audio') {
         videoPanel.style.display = 'none';
         document.getElementById('toggle-cam').style.opacity = '0.5';
@@ -412,7 +436,6 @@ async function initMedia(mode) {
             return;
         }
     } else {
-        // Видео режим
         videoPanel.style.display = 'flex';
         callUi.localVideo.style.display = 'block';
         callUi.remoteVideo.style.display = 'block';
@@ -441,7 +464,6 @@ async function initMedia(mode) {
         document.getElementById('toggle-cam').style.textDecoration = 'line-through';
         document.getElementById('toggle-mic').style.opacity = '0.5';
         document.getElementById('toggle-mic').style.textDecoration = 'line-through';
-        alert("Не удалось получить доступ к микрофону/камере!\nПроверьте разрешения. Звонок запущен в текстовом режиме.");
     }
 }
 
@@ -449,6 +471,8 @@ function makeCall(targetIdStr, mode) {
     targetId = targetIdStr.toUpperCase();
     currentCallMode = mode;
     callMode = 'call'; switchTab('call');
+    isCaller = true; // Указываем, что мы инициируем звонок
+    iceCandidateQueue = [];
     callUi.status.innerText = `Звоним ${targetId}...`;
     
     loadChatHistory(targetId);
@@ -468,6 +492,17 @@ function makeCall(targetIdStr, mode) {
     wakeUpControls();
 }
 
+async function processIceQueue() {
+    while (iceCandidateQueue.length > 0) {
+        let candidate = iceCandidateQueue.shift();
+        try { 
+            await peerConnection.addIceCandidate(candidate); 
+        } catch(e) {
+            console.error("Ошибка применения маршрута из очереди", e);
+        }
+    }
+}
+
 function connectSignaling() {
     if (!myId) return;
     if (sse) sse.close();
@@ -485,6 +520,8 @@ function connectSignaling() {
         if (msg.type === 'ring' && callMode === 'idle') {
             targetId = msg.from; callMode = 'incoming';
             currentCallMode = msg.callType || 'video';
+            isCaller = false; // Принимающая сторона
+            iceCandidateQueue = [];
             
             // --- УВЕДОМЛЕНИЯ О ВХОДЯЩЕМ ЗВОНКЕ ---
             let typeText = currentCallMode === 'video' ? '📹 Видеозвонок' : (currentCallMode === 'audio' ? '📞 Голосовой звонок' : '💬 Текстовый чат');
@@ -517,9 +554,11 @@ function connectSignaling() {
 
         if (msg.type === 'accept' && callMode === 'call') {
             stopDialTone(); callUi.status.innerText = "Ответ получен. Настройка...";
-            setupPeerConnection(); dataChannel = peerConnection.createDataChannel('chatAndFiles'); setupDataChannel();
-            const offer = await peerConnection.createOffer(); await peerConnection.setLocalDescription(offer);
-            sendSignal(targetId, { type: 'offer', targetId, offer, from: myId });
+            setupPeerConnection(); 
+            dataChannel = peerConnection.createDataChannel('chatAndFiles'); 
+            setupDataChannel();
+            // Явная отправка ключей без опоры на "гонку"
+            forceNegotiation();
         }
 
         if (msg.type === 'reject' && callMode === 'call') {
@@ -529,18 +568,35 @@ function connectSignaling() {
 
         if (msg.type === 'offer') {
             if (!peerConnection) setupPeerConnection();
+            
+            // Игнорируем конфликты, если мы не звонящий (уступаем место)
+            if (peerConnection.signalingState !== "stable" && !isCaller) {
+                return; 
+            }
+
             await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.offer));
-            const answer = await peerConnection.createAnswer(); await peerConnection.setLocalDescription(answer);
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
             sendSignal(msg.from, { type: 'answer', targetId: msg.from, answer });
+            processIceQueue();
         }
 
         if (msg.type === 'answer') {
             await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.answer));
             logSys("P2P Ключи синхронизированы");
+            processIceQueue();
         }
 
         if (msg.type === 'candidate' && peerConnection) {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate));
+            try {
+                const candidate = new RTCIceCandidate(msg.candidate);
+                // Если мы еще не обменялись ключами, ставим маршрут в очередь
+                if (peerConnection.remoteDescription && peerConnection.remoteDescription.type) {
+                    await peerConnection.addIceCandidate(candidate);
+                } else {
+                    iceCandidateQueue.push(candidate);
+                }
+            } catch(e) { console.error("Ошибка применения маршрута", e); }
         }
     };
 
@@ -569,25 +625,16 @@ document.getElementById('reject-call-btn').onclick = () => {
 function setupPeerConnection() {
     if (peerConnection) peerConnection.close();
     peerConnection = new RTCPeerConnection(rtcConfig);
+    iceCandidateQueue = [];
     
-    // Динамическое обновление при добавлении потоков "на лету"
-    peerConnection.onnegotiationneeded = async () => {
-        try {
-            if (peerConnection.signalingState !== "stable") return;
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            sendSignal(targetId, { type: 'offer', targetId, offer, from: myId });
-        } catch (err) {
-            console.error("Negotiation error:", err);
-        }
-    };
+    // Мы полностью удаляем onnegotiationneeded, так как он вызывает состояние гонки (race conditions). 
+    // Теперь мы контролируем процесс настройки обмена ключами вручную.
 
     if (localStream) localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
     peerConnection.onicecandidate = (e) => { if (e.candidate) sendSignal(targetId, { type: 'candidate', targetId, candidate: e.candidate }); };
     
     peerConnection.ontrack = (e) => { 
-        // Если пришло видео от собеседника - открываем панель
         if (!callUi.remoteVideo.srcObject || callUi.remoteVideo.srcObject.id !== e.streams[0].id) {
             callUi.remoteVideo.srcObject = e.streams[0];
         }
@@ -768,6 +815,7 @@ document.getElementById('share-screen').onclick = async function() {
             s.replaceTrack(screenTrack);
         } else {
             peerConnection.addTrack(screenTrack, localStream);
+            forceNegotiation();
         }
         
         callUi.localVideo.srcObject = screenStream; 

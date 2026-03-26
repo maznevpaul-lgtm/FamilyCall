@@ -486,11 +486,22 @@ function connectSignaling() {
             targetId = msg.from; callMode = 'incoming';
             currentCallMode = msg.callType || 'video';
             
+            // --- УВЕДОМЛЕНИЯ О ВХОДЯЩЕМ ЗВОНКЕ ---
+            let typeText = currentCallMode === 'video' ? '📹 Видеозвонок' : (currentCallMode === 'audio' ? '📞 Голосовой звонок' : '💬 Текстовый чат');
+            if (window.Notification && Notification.permission === 'granted' && document.hidden) {
+                const notif = new Notification("Входящий вызов!", {
+                    body: `Вам звонит: ${targetId} (${typeText})`
+                });
+                notif.onclick = function() {
+                    window.focus();
+                    this.close();
+                };
+            }
+            // -------------------------------------
+
             document.getElementById('incoming-ring-ui').style.display = 'block';
             document.getElementById('incoming-canceled-ui').style.display = 'none';
             callUi.incomingCallerId.innerText = targetId;
-            
-            let typeText = currentCallMode === 'video' ? '📹 Видеозвонок' : (currentCallMode === 'audio' ? '📞 Голосовой звонок' : '💬 Текстовый чат');
             document.getElementById('incoming-call-type').innerText = typeText;
 
             callUi.incomingOverlay.style.display = 'flex';
@@ -607,7 +618,23 @@ function setupDataChannel() {
     
     dataChannel.onmessage = (e) => {
         const msg = JSON.parse(e.data);
-        if (msg.type === 'text') { playMessageSound(); appendMsg(msg.text, false, false, true); } 
+        if (msg.type === 'text') { 
+            playMessageSound(); 
+            appendMsg(msg.text, false, false, true); 
+            
+            // --- УВЕДОМЛЕНИЕ О НОВОМ СООБЩЕНИИ В ФОНЕ ---
+            if (window.Notification && Notification.permission === 'granted' && document.hidden) {
+                const notif = new Notification("Новое сообщение", {
+                    body: msg.text
+                });
+                notif.onclick = function() {
+                    window.focus();
+                    this.close();
+                };
+            }
+            // --------------------------------------------
+            
+        } 
         else if (msg.type === 'file-start') {
             incomingFileInfo = msg; fileReceiveBuffer = [];
             document.getElementById('file-progress-container').style.display = 'block';
@@ -841,4 +868,14 @@ controlsEl.addEventListener('mouseenter', () => clearTimeout(controlsTimeout));
 controlsEl.addEventListener('mouseleave', wakeUpControls);
 
 wakeUpControls();
+
+// --- 9. ЗАПРОС РАЗРЕШЕНИЙ НА УВЕДОМЛЕНИЯ ---
+// Браузеры требуют клика пользователя для запроса разрешений.
+// Сделаем запрос при первом клике в любой области документа.
+document.body.addEventListener('click', () => {
+    if (window.Notification && Notification.permission === 'default') {
+        Notification.requestPermission();
+    }
+}, { once: true });
+
 connectSignaling();

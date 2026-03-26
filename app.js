@@ -23,7 +23,6 @@ let isScreenSharing = false, isVideoSwapped = false;
 const CHUNK_SIZE = 16384; 
 let fileReceiveBuffer = [], incomingFileInfo = null;
 
-// Новые переменные для решения проблемы "гонки" и стабильного соединения
 let isCaller = false; 
 let iceCandidateQueue = [];
 
@@ -51,6 +50,11 @@ function switchTab(tabId) {
     document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
     document.getElementById(tabId + '-view').classList.add('active');
     document.getElementById('btn-' + tabId).classList.add('active');
+    
+    // Очищаем красную точку с кнопки чата при переходе
+    if (tabId === 'call') {
+        document.getElementById('btn-call').innerText = "🖥️ Вызов";
+    }
 }
 
 myId = store.get('myId');
@@ -338,7 +342,6 @@ function resetCallUI() {
     if (screenStream) { screenStream.getTracks().forEach(t => t.stop()); screenStream = null; }
     callUi.localVideo.srcObject = null; callUi.remoteVideo.srcObject = null;
     
-    // Возвращаем UI в базовое состояние
     document.querySelector('.video-panel').style.display = 'flex';
     callUi.placeholder.style.display = 'flex'; 
     callUi.status.innerText = 'Ожидание действий...';
@@ -346,13 +349,11 @@ function resetCallUI() {
     callUi.msgInput.disabled = true; callUi.sendBtn.disabled = true;
     callUi.fileLabel.style.opacity = '0.5'; callUi.fileLabel.style.pointerEvents = 'none';
     
-    // Сброс кнопок управления
     document.getElementById('toggle-mic').style.opacity = '1';
     document.getElementById('toggle-mic').style.textDecoration = 'none';
     document.getElementById('toggle-cam').style.opacity = '1';
     document.getElementById('toggle-cam').style.textDecoration = 'none';
     
-    // Очищаем переменные безопасности связи
     isVideoSwapped = false;
     isCaller = false;
     iceCandidateQueue = [];
@@ -369,7 +370,7 @@ function loadChatHistory(id) {
     chatHistory.forEach(msg => appendMsg(msg.text, msg.isMine, msg.isHtml, false));
 }
 
-// Принудительная отправка ключей при добавлении медиа
+// Принудительная отправка ключей при добавлении медиа "на лету"
 async function forceNegotiation() {
     if (!peerConnection) return;
     try {
@@ -432,7 +433,7 @@ async function initMedia(mode) {
         document.getElementById('toggle-mic').style.textDecoration = mode === 'chat' ? 'line-through' : 'none';
         
         if (mode === 'chat') {
-            logSys("Выбран текстовый режим. Вы можете включить микрофон или камеру в любой момент.");
+            logSys("Режим чата. Нажмите иконку камеры или микрофона внизу, чтобы добавить их в любой момент.");
             return;
         }
     } else {
@@ -456,7 +457,7 @@ async function initMedia(mode) {
             callUi.localVideo.srcObject = localStream; 
             callUi.localVideo.style.transform = currentFacingMode === 'user' ? 'scaleX(-1)' : 'none';
         }
-        logSys(`Медиа устройства активны (${mode})`);
+        logSys(`Устройства активны (${mode})`);
     } catch (e) { 
         logSys("⚠️ Ошибка: Доступ к медиа запрещен. Переход в текстовый режим."); 
         videoPanel.style.display = 'none';
@@ -467,11 +468,57 @@ async function initMedia(mode) {
     }
 }
 
+// Новая логика для старта тихого чата
+function startChat(targetIdStr) {
+    targetId = targetIdStr.toUpperCase();
+    currentCallMode = 'chat';
+    callMode = 'call';
+    isCaller = true;
+    iceCandidateQueue = [];
+    switchTab('call');
+    
+    callUi.status.innerText = `Подключение к ${targetId}...`;
+    callUi.status.style.color = '#89b4fa';
+    
+    loadChatHistory(targetId);
+    
+    initMedia('chat').then(async () => {
+        setupPeerConnection();
+        dataChannel = peerConnection.createDataChannel('chatAndFiles');
+        setupDataChannel();
+        
+        try {
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            // Отправляем специальный сигнал chat_offer (он будет обработан без звонка)
+            sendSignal(targetId, { type: 'chat_offer', targetId, offer, from: myId });
+            
+            // Если абонент не ответит за 10 секунд
+            ringTimeout = setTimeout(() => {
+                if (peerConnection && peerConnection.connectionState !== 'connected') {
+                    callUi.status.innerText = "Абонент не в сети";
+                    callUi.status.style.color = "#f38ba8";
+                    setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 3000);
+                }
+            }, 10000); 
+        } catch(e) {
+            console.error("Ошибка старта чата", e);
+        }
+    });
+    wakeUpControls();
+}
+
 function makeCall(targetIdStr, mode) {
+    // Если выбран чат, запускаем тихий алгоритм
+    if (mode === 'chat') {
+        startChat(targetIdStr);
+        return;
+    }
+
     targetId = targetIdStr.toUpperCase();
     currentCallMode = mode;
     callMode = 'call'; switchTab('call');
-    isCaller = true; // Указываем, что мы инициируем звонок
+    isCaller = true; 
     iceCandidateQueue = [];
     callUi.status.innerText = `Звоним ${targetId}...`;
     
@@ -498,7 +545,7 @@ async function processIceQueue() {
         try { 
             await peerConnection.addIceCandidate(candidate); 
         } catch(e) {
-            console.error("Ошибка применения маршрута из очереди", e);
+            console.error("Ошибка применения маршрута", e);
         }
     }
 }
@@ -514,27 +561,50 @@ function connectSignaling() {
         let msg; try { msg = JSON.parse(payload.message); } catch (err) { return; }
         if (msg.from === myId) return;
 
-        logSys(`Получен сигнал: [${msg.type}]`);
+        logSys(`Сигнал: [${msg.type}]`);
         if (ringTimeout) clearTimeout(ringTimeout);
+
+        // --- ОБРАБОТКА ТИХОГО ВХОДЯЩЕГО ЧАТА ---
+        if (msg.type === 'chat_offer') {
+            if (callMode !== 'idle') {
+                sendSignal(msg.from, { type: 'reject', targetId: msg.from, from: myId, reason: 'busy' });
+                return;
+            }
+            targetId = msg.from;
+            callMode = 'answer';
+            currentCallMode = 'chat';
+            isCaller = false;
+            iceCandidateQueue = [];
+
+            loadChatHistory(targetId);
+            initMedia('chat'); 
+            
+            setupPeerConnection();
+            
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.offer));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                sendSignal(msg.from, { type: 'answer', targetId: msg.from, answer });
+                processIceQueue();
+            } catch(e) {
+                console.error("Ошибка тихого чата", e);
+            }
+            return;
+        }
+        // ----------------------------------------
 
         if (msg.type === 'ring' && callMode === 'idle') {
             targetId = msg.from; callMode = 'incoming';
             currentCallMode = msg.callType || 'video';
-            isCaller = false; // Принимающая сторона
+            isCaller = false;
             iceCandidateQueue = [];
             
-            // --- УВЕДОМЛЕНИЯ О ВХОДЯЩЕМ ЗВОНКЕ ---
             let typeText = currentCallMode === 'video' ? '📹 Видеозвонок' : (currentCallMode === 'audio' ? '📞 Голосовой звонок' : '💬 Текстовый чат');
             if (window.Notification && Notification.permission === 'granted' && document.hidden) {
-                const notif = new Notification("Входящий вызов!", {
-                    body: `Вам звонит: ${targetId} (${typeText})`
-                });
-                notif.onclick = function() {
-                    window.focus();
-                    this.close();
-                };
+                const notif = new Notification("Входящий вызов!", { body: `Вам звонит: ${targetId} (${typeText})` });
+                notif.onclick = function() { window.focus(); this.close(); };
             }
-            // -------------------------------------
 
             document.getElementById('incoming-ring-ui').style.display = 'block';
             document.getElementById('incoming-canceled-ui').style.display = 'none';
@@ -543,6 +613,9 @@ function connectSignaling() {
 
             callUi.incomingOverlay.style.display = 'flex';
             playRingtone();
+        } else if (msg.type === 'ring' && callMode !== 'idle') {
+            // Если мы уже говорим, отбиваем звонок как "Занят"
+            sendSignal(msg.from, { type: 'reject', targetId: msg.from, from: myId, reason: 'busy' });
         }
 
         if (msg.type === 'cancel' && callMode === 'incoming') {
@@ -557,19 +630,24 @@ function connectSignaling() {
             setupPeerConnection(); 
             dataChannel = peerConnection.createDataChannel('chatAndFiles'); 
             setupDataChannel();
-            // Явная отправка ключей без опоры на "гонку"
             forceNegotiation();
         }
 
         if (msg.type === 'reject' && callMode === 'call') {
-            stopDialTone(); playHangupTone(); callUi.status.innerText = "Вызов отклонен"; callUi.status.style.color = "#f38ba8"; 
+            stopDialTone(); playHangupTone(); 
+            if (msg.reason === 'busy') {
+                callUi.status.innerText = "Абонент занят";
+            } else {
+                callUi.status.innerText = "Вызов отклонен";
+            }
+            callUi.status.style.color = "#f38ba8"; 
             setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 3000);
         }
 
         if (msg.type === 'offer') {
             if (!peerConnection) setupPeerConnection();
             
-            // Игнорируем конфликты, если мы не звонящий (уступаем место)
+            // Если идет конфликт предложений, уступает принимающая сторона
             if (peerConnection.signalingState !== "stable" && !isCaller) {
                 return; 
             }
@@ -590,7 +668,6 @@ function connectSignaling() {
         if (msg.type === 'candidate' && peerConnection) {
             try {
                 const candidate = new RTCIceCandidate(msg.candidate);
-                // Если мы еще не обменялись ключами, ставим маршрут в очередь
                 if (peerConnection.remoteDescription && peerConnection.remoteDescription.type) {
                     await peerConnection.addIceCandidate(candidate);
                 } else {
@@ -626,9 +703,6 @@ function setupPeerConnection() {
     if (peerConnection) peerConnection.close();
     peerConnection = new RTCPeerConnection(rtcConfig);
     iceCandidateQueue = [];
-    
-    // Мы полностью удаляем onnegotiationneeded, так как он вызывает состояние гонки (race conditions). 
-    // Теперь мы контролируем процесс настройки обмена ключами вручную.
 
     if (localStream) localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
@@ -669,18 +743,16 @@ function setupDataChannel() {
             playMessageSound(); 
             appendMsg(msg.text, false, false, true); 
             
-            // --- УВЕДОМЛЕНИЕ О НОВОМ СООБЩЕНИИ В ФОНЕ ---
-            if (window.Notification && Notification.permission === 'granted' && document.hidden) {
-                const notif = new Notification("Новое сообщение", {
-                    body: msg.text
-                });
-                notif.onclick = function() {
-                    window.focus();
-                    this.close();
-                };
+            // --- УВЕДОМЛЕНИЕ И КРАСНАЯ ТОЧКА ЕСЛИ МЫ НЕ В ЧАТЕ ---
+            if (document.getElementById('call-view').classList.contains('active') === false) {
+                document.getElementById('btn-call').innerText = "🖥️ Вызов 🔴";
             }
-            // --------------------------------------------
-            
+
+            if (window.Notification && Notification.permission === 'granted' && document.hidden) {
+                const notif = new Notification("Новое сообщение", { body: msg.text });
+                notif.onclick = function() { window.focus(); this.close(); };
+            }
+            // -----------------------------------------------------
         } 
         else if (msg.type === 'file-start') {
             incomingFileInfo = msg; fileReceiveBuffer = [];
@@ -888,7 +960,7 @@ document.addEventListener('click', (e) => {
 
 // --- 8. АВТОСКРЫТИЕ КНОПОК ПРИ НЕАКТИВНОСТИ ---
 let controlsTimeout;
-const callView = document.getElementById('call-view'); // Отслеживаем активность по всему окну
+const callView = document.getElementById('call-view');
 const controlsEl = document.querySelector('.controls');
 
 function wakeUpControls() {
@@ -902,12 +974,11 @@ function wakeUpControls() {
         controlsTimeout = setTimeout(() => {
             controlsEl.style.opacity = '0';
             controlsEl.style.pointerEvents = 'none';
-            controlsEl.style.transform = 'translateX(-50%) translateY(20px)'; // Плавный уход вниз
+            controlsEl.style.transform = 'translateX(-50%) translateY(20px)';
         }, 3000);
     }
 }
 
-// Пробуждение панели при любой активности
 callView.addEventListener('mousemove', wakeUpControls);
 callView.addEventListener('touchstart', wakeUpControls, { passive: true });
 callView.addEventListener('click', wakeUpControls);
@@ -918,8 +989,6 @@ controlsEl.addEventListener('mouseleave', wakeUpControls);
 wakeUpControls();
 
 // --- 9. ЗАПРОС РАЗРЕШЕНИЙ НА УВЕДОМЛЕНИЯ ---
-// Браузеры требуют клика пользователя для запроса разрешений.
-// Сделаем запрос при первом клике в любой области документа.
 document.body.addEventListener('click', () => {
     if (window.Notification && Notification.permission === 'default') {
         Notification.requestPermission();

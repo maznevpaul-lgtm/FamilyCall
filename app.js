@@ -7,11 +7,14 @@ const store = {
 // --- 2. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И НАСТРОЙКИ WEBRTC ---
 const rtcConfig = { 
     iceServers: [
+        // Российские STUN серверы (Яндекс, SIPnet)
         { urls: "stun:stun.yandex.ru:3478" },
         { urls: "stun:stun.sipnet.ru:3478" },
+        // Международные серверы (Google, Cloudflare)
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun1.l.google.com:19302" },
         { urls: "stun:stun.cloudflare.com:3478" },
+        // TURN серверы для обхода NAT (Metered)
         { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
         { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" }
     ] 
@@ -51,7 +54,7 @@ const callUi = {
     addUnknownBtn: document.getElementById('add-unknown-btn')
 };
 
-// --- ВЫВОД ИМЕНИ ---
+// --- ПОЛУЧИТЬ ИМЯ КОНТАКТА ПО ID ---
 function getContactName(id) {
     if (!id) return "Неизвестный";
     const contacts = store.get('contacts') || [];
@@ -259,11 +262,21 @@ function renderContacts(contacts) {
             }
         }, { passive: true });
 
-        li.querySelector('.contact-content').addEventListener('click', () => li.classList.remove('show-actions'));
+        // Открытие чата при клике на саму карточку контакта
+        li.querySelector('.contact-content').addEventListener('click', () => {
+            if (li.classList.contains('show-actions')) {
+                li.classList.remove('show-actions');
+            } else {
+                makeCall(c.id, 'chat');
+            }
+        });
+
         list.appendChild(li);
     });
 
     document.querySelectorAll('.btn-call-video, .btn-call-audio, .btn-call-chat').forEach(btn => btn.addEventListener('click', (e) => {
+        // Предотвращаем срабатывание клика по всей карточке, если нажали конкретную кнопку связи
+        e.stopPropagation();
         makeCall(e.currentTarget.getAttribute('data-id'), e.currentTarget.getAttribute('data-mode'));
     }));
     

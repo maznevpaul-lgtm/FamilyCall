@@ -4,15 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Семейная P2P Связь</title>
+    <!-- Подключаем файл со стилями -->
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
+    <!-- ВЕРХНЯЯ НАВИГАЦИЯ (ТАБЫ) -->
     <div class="tab-bar">
         <button id="btn-contacts" class="tab-btn active" onclick="switchTab('contacts')">📞 Контакты</button>
         <button id="btn-call" class="tab-btn" onclick="switchTab('call')">🖥️ Вызов</button>
     </div>
 
+    <!-- ВКЛАДКА 1: КОНТАКТЫ -->
     <div id="contacts-view" class="view-container active">
         <div class="contacts-wrapper">
             
@@ -56,6 +59,7 @@
         </div>
     </div>
 
+    <!-- ВКЛАДКА 2: ЗВОНОК И ЧАТ -->
     <div id="call-view" class="view-container">
 
         <div class="call-header">
@@ -94,10 +98,12 @@
                     <button id="emoji-btn" style="background: none; border: none; font-size: 22px; cursor: pointer; padding: 0 5px; opacity: 0.5; pointer-events: none; flex-shrink: 0; align-self: flex-end; margin-bottom: 8px;" title="Эмодзи">😀</button>
                     <button id="send-btn" disabled>➤</button>
 
+                    <!-- Окно выбора эмодзи -->
                     <div id="emoji-picker" class="emoji-picker"></div>
                 </div>
             </div>
 
+            <!-- Элементы управления теперь лежат поверх всего контейнера -->
             <div class="controls">
                 <button class="ctrl-btn" id="toggle-mic">Микрофон</button>
                 <button class="ctrl-btn" id="toggle-cam">Камера</button>
@@ -108,6 +114,7 @@
         </div>
     </div>
 
+    <!-- Настройки (Проверка камеры) -->
     <div id="settings-modal">
         <div class="settings-content">
             <h3 style="margin-top:0;">Проверка связи ⚙️</h3>
@@ -122,6 +129,7 @@
         </div>
     </div>
 
+    <!-- Редактирование контакта -->
     <div id="edit-contact-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; align-items: center; justify-content: center; padding: 20px;">
         <div class="settings-content">
             <h3 style="margin-top:0; margin-bottom: 15px;">✏️ Редактировать контакт</h3>
@@ -135,6 +143,7 @@
         </div>
     </div>
 
+    <!-- Сохранение неизвестного контакта -->
     <div id="add-unknown-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; align-items: center; justify-content: center; padding: 20px;">
         <div class="settings-content">
             <h3 style="margin-top:0; margin-bottom: 5px;">➕ Сохранить контакт</h3>
@@ -148,6 +157,7 @@
         </div>
     </div>
 
+    <!-- Кастомное универсальное окно уведомлений -->
     <div id="custom-alert-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10005; align-items: center; justify-content: center; padding: 20px;">
         <div class="settings-content" style="text-align: center; max-width: 280px;">
             <div id="custom-alert-icon" style="font-size: 36px; margin-bottom: 10px;">ℹ️</div>
@@ -160,6 +170,7 @@
         </div>
     </div>
 
+    <!-- Входящий звонок -->
     <div id="incoming-overlay">
         <div id="incoming-ring-ui" style="text-align: center; width: 100%;">
             <div style="font-size: 60px; margin-bottom: 10px; animation: ring-shake 0.8s infinite alternate;">📞</div>
@@ -176,6 +187,7 @@
         </div>
     </div>
 
+    <!-- Подключаем логику скриптов -->
     <script src="app.js"></script>
     <script src="emoji.js"></script>
 </body>

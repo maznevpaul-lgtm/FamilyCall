@@ -70,7 +70,7 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
 .btn-del { background: #ffebee; color: #c62828; border-left: 1px solid #ffcdd2; }
 .btn-del:hover { background: #ffcdd2; }
 
-/* Открываем панель ТОЛЬКО по клику/тапу или свайпу (через добавление класса show-actions скриптом) */
+/* Открываем панель ТОЛЬКО по клику/тапу или свайпу */
 #contacts-list li.show-actions .contact-content { transform: translateX(-100px); }
 #contacts-list li.show-actions .swipe-actions { right: 0; }
 #contacts-list li.show-actions .del-handle { opacity: 0; pointer-events: none; }
@@ -113,7 +113,7 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
 
 .chat-panel { flex: 2; background: #2a2a3f; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #45475a; }
 #chat-box { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-.msg { padding: 8px 12px; border-radius: 12px; font-size: 14px; max-width: 85%; word-wrap: break-word; line-height: 1.4; }
+.msg { padding: 8px 12px; border-radius: 12px; font-size: 14px; max-width: 85%; word-wrap: break-word; line-height: 1.4; white-space: pre-wrap; }
 .msg-mine { background: #89b4fa; color: #1e1e2e; align-self: flex-end; border-bottom-right-radius: 2px; }
 .msg-peer { background: #45475a; color: #fff; align-self: flex-start; border-bottom-left-radius: 2px; }
 
@@ -121,13 +121,20 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
 #file-progress-bar-bg { width: 100%; height: 6px; background: #1e1e2e; border-radius: 3px; margin-top: 5px; overflow: hidden; }
 #file-progress-bar { width: 0%; height: 100%; background: #a6e3a1; transition: width 0.2s; }
 
-.input-area { display: flex; padding: 10px 15px; background: #1e1e2e; border-top: 1px solid #45475a; gap: 8px; align-items: center; flex-shrink: 0; }
-.input-area input[type="text"] { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #45475a; background: #313244; color: #fff; outline: none; font-size: 14px; text-transform: none; min-width: 0; }
-.input-area input[type="text"]:focus { border-color: #89b4fa; }
-.input-area input[type="text"]:disabled { opacity: 0.5; cursor: not-allowed; }
-#send-btn { background: #89b4fa; color: #1e1e2e; border: none; padding: 0 15px; height: 100%; border-radius: 8px; cursor: pointer; font-weight: bold; transition: opacity 0.2s; display: flex; align-items: center; justify-content: center; }
+/* Адаптивное поле ввода текста */
+.input-area { display: flex; padding: 10px 15px; background: #1e1e2e; border-top: 1px solid #45475a; gap: 8px; align-items: flex-end; flex-shrink: 0; }
+.input-area textarea { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #45475a; background: #313244; color: #fff; outline: none; font-size: 14px; resize: none; overflow-y: hidden; min-height: 40px; max-height: 120px; line-height: 20px; font-family: inherit; transition: border-color 0.2s; box-sizing: border-box; }
+.input-area textarea:focus { border-color: #89b4fa; }
+.input-area textarea:disabled { opacity: 0.5; cursor: not-allowed; }
+
+#send-btn { background: #89b4fa; color: #1e1e2e; border: none; padding: 0 15px; height: 40px; border-radius: 8px; cursor: pointer; font-weight: bold; transition: opacity 0.2s; display: flex; align-items: center; justify-content: center; align-self: flex-end; }
 #send-btn:hover:not(:disabled) { background: #b4befe; }
 #send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Окно выбора эмодзи */
+.emoji-picker { display: none; position: absolute; bottom: 65px; right: 15px; background: #313244; border: 1px solid #45475a; border-radius: 8px; padding: 10px; grid-template-columns: repeat(6, 1fr); gap: 8px; z-index: 100; max-height: 200px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+.emoji-item { cursor: pointer; font-size: 22px; text-align: center; transition: transform 0.1s; user-select: none; }
+.emoji-item:hover { transform: scale(1.2); }
 
 /* ========================================== */
 /* ПЕРЕКРЫВАЮЩИЙ ЭКРАН ВХОДЯЩЕГО ЗВОНКА       */
@@ -174,4 +181,7 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
     #incoming-overlay > div { width: 100%; }
     #incoming-overlay .call-buttons { display: flex; flex-direction: column; gap: 15px; align-items: center; margin-top: 30px; }
     .call-btn-acc, .call-btn-rej { width: 100%; max-width: 250px; }
+    
+    /* Эмодзи пикер для телефона */
+    .emoji-picker { right: 10px; left: 10px; grid-template-columns: repeat(8, 1fr); max-height: 150px; }
 }

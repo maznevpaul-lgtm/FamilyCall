@@ -32,6 +32,9 @@ let fileReceiveBuffer = [], incomingFileInfo = null;
 let isCaller = false; 
 let iceCandidateQueue = [];
 
+// Фиксируем время запуска приложения, чтобы игнорировать старые WebRTC сигналы (допуск 10 сек)
+const appStartTime = Date.now();
+
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 let dialInterval = null, ringInterval = null;
 
@@ -44,6 +47,8 @@ const callUi = {
     msgInput: document.getElementById('msg-input'),
     sendBtn: document.getElementById('send-btn'),
     fileLabel: document.getElementById('file-label'),
+    emojiBtn: document.getElementById('emoji-btn'),
+    emojiPicker: document.getElementById('emoji-picker'),
     hangupBtn: document.getElementById('hangup-btn'),
     incomingOverlay: document.getElementById('incoming-overlay'),
     incomingCallerId: document.getElementById('incoming-caller-id'),
@@ -59,6 +64,28 @@ function getContactName(id) {
     return c ? c.name : id;
 }
 
+// --- УНИВЕРСАЛЬНАЯ КАСТОМНАЯ МОДАЛКА УВЕДОМЛЕНИЙ ---
+function showModal(text, title = "Уведомление", icon = "ℹ️", isConfirm = false, onOk = null) {
+    document.getElementById('custom-alert-title').innerText = title;
+    document.getElementById('custom-alert-text').innerHTML = text; // Разрешаем HTML теги типа <br>
+    document.getElementById('custom-alert-icon').innerText = icon;
+    document.getElementById('custom-alert-modal').style.display = 'flex';
+    
+    const okBtn = document.getElementById('custom-alert-ok');
+    const cancelBtn = document.getElementById('custom-alert-cancel');
+    
+    cancelBtn.style.display = isConfirm ? 'block' : 'none';
+    
+    okBtn.onclick = () => {
+        document.getElementById('custom-alert-modal').style.display = 'none';
+        if (onOk) onOk();
+    };
+    
+    cancelBtn.onclick = () => {
+        document.getElementById('custom-alert-modal').style.display = 'none';
+    };
+}
+
 // --- 3. ИНИЦИАЛИЗАЦИЯ И ВКЛАДКИ ---
 function switchTab(tabId) {
     document.querySelectorAll('.view-container').forEach(el => el.classList.remove('active'));
@@ -69,6 +96,8 @@ function switchTab(tabId) {
     // Очищаем красную точку с кнопки чата при переходе
     if (tabId === 'call') {
         document.getElementById('btn-call').innerText = "🖥️ Вызов";
+        // Скроллим чат вниз если перешли
+        if(callMode !== 'idle') callUi.chatBox.scrollTop = callUi.chatBox.scrollHeight;
     }
 }
 
@@ -87,20 +116,40 @@ function checkUnknownContact(id) {
     if (!isKnown && id && id !== myId) {
         callUi.addUnknownBtn.style.display = 'inline-block';
         callUi.addUnknownBtn.onclick = () => {
-            const name = prompt(`Введите имя для нового контакта (${id}):`, "Новый контакт");
-            if (name) {
-                contacts.push({ name: name.trim(), id: id });
-                store.set('contacts', contacts);
-                renderContacts(contacts);
-                callUi.addUnknownBtn.style.display = 'none';
-                document.getElementById('call-peer-name').innerText = name.trim();
-                logSys(`Контакт ${name} успешно сохранен.`);
-            }
+            // Вместо системного prompt открываем нашу красивую модалку
+            document.getElementById('add-unknown-id').value = id;
+            document.getElementById('add-unknown-name').value = "Новый контакт";
+            document.getElementById('add-unknown-modal').style.display = 'flex';
+            document.getElementById('add-unknown-name').select(); // Выделяем текст для быстрого стирания
         };
     } else {
         callUi.addUnknownBtn.style.display = 'none';
     }
 }
+
+// Обработчики кнопок для новой модалки сохранения неизвестного контакта
+document.getElementById('cancel-unknown-btn').addEventListener('click', () => {
+    document.getElementById('add-unknown-modal').style.display = 'none';
+});
+
+document.getElementById('save-unknown-btn').addEventListener('click', () => {
+    const name = document.getElementById('add-unknown-name').value.trim();
+    const id = document.getElementById('add-unknown-id').value;
+    
+    if (!name) return; // Игнорируем пустое имя
+    
+    const contacts = store.get('contacts') || [];
+    contacts.push({ name: name, id: id });
+    store.set('contacts', contacts);
+    renderContacts(contacts);
+    
+    callUi.addUnknownBtn.style.display = 'none';
+    document.getElementById('call-peer-name').innerText = name;
+    logSys(`Контакт ${name} успешно сохранен.`);
+    
+    document.getElementById('add-unknown-modal').style.display = 'none';
+});
+
 
 // --- 4. АУДИО СИНТЕЗАТОР ---
 function playRingtone() {
@@ -246,11 +295,11 @@ function renderContacts(contacts) {
     }));
 
     document.querySelectorAll('.btn-del').forEach(btn => btn.addEventListener('click', (e) => {
-        if (confirm('Удалить контакт?')) {
+        showModal(`Вы действительно хотите удалить этот контакт?`, "Удаление", "🗑️", true, () => {
             const contacts = store.get('contacts') || [];
             contacts.splice(e.currentTarget.getAttribute('data-index'), 1);
             store.set('contacts', contacts); renderContacts(contacts);
-        }
+        });
     }));
 }
 
@@ -259,7 +308,7 @@ renderContacts(store.get('contacts') || []);
 document.getElementById('add-btn').addEventListener('click', () => {
     const name = document.getElementById('contact-name').value.trim();
     const id = document.getElementById('contact-id').value.trim().toUpperCase();
-    if (!name || !id) return alert("Введите Имя и ID");
+    if (!name || !id) return showModal("Пожалуйста, заполните поля Имя и ID.", "Ошибка", "⚠️");
     const contacts = store.get('contacts') || [];
     contacts.push({ name, id });
     store.set('contacts', contacts); renderContacts(contacts);
@@ -279,7 +328,7 @@ document.getElementById('cancel-id-btn').addEventListener('click', () => {
 
 document.getElementById('save-id-btn').addEventListener('click', () => {
     const newId = document.getElementById('new-id-input').value.trim().toUpperCase().replace(/[^A-Z0-9А-Я]/g, ''); 
-    if (!newId) return alert("ID не может быть пустым!");
+    if (!newId) return showModal("Ваш ID не может быть пустым!", "Ошибка", "⚠️");
     store.set('myId', newId); myId = newId;
     document.getElementById('my-id-display').innerText = newId;
     document.getElementById('id-edit-container').style.display = 'none';
@@ -296,7 +345,7 @@ document.getElementById('save-edit-btn').addEventListener('click', () => {
     const name = document.getElementById('edit-contact-name').value.trim();
     const id = document.getElementById('edit-contact-id').value.trim().toUpperCase();
     
-    if (!name || !id) return alert("Введите Имя и ID");
+    if (!name || !id) return showModal("Пожалуйста, заполните поля Имя и ID.", "Ошибка", "⚠️");
     
     const contacts = store.get('contacts') || [];
     if (contacts[index]) {
@@ -354,7 +403,7 @@ document.getElementById('close-settings-btn').addEventListener('click', () => {
 
 document.getElementById('export-btn').addEventListener('click', () => {
     const contacts = store.get('contacts') || [];
-    if (contacts.length === 0) return alert("Список пуст!");
+    if (contacts.length === 0) return showModal("Список контактов пуст! Экспортировать нечего.", "Экспорт", "📁");
     const blob = new Blob([JSON.stringify(contacts, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'p2p_contacts.json'; a.click(); URL.revokeObjectURL(url);
 });
@@ -366,8 +415,8 @@ document.getElementById('import-file').addEventListener('change', (e) => {
     reader.onload = (event) => {
         try {
             const imported = JSON.parse(event.target.result);
-            if (Array.isArray(imported)) { store.set('contacts', imported); renderContacts(imported); alert("Контакты восстановлены!"); }
-        } catch (err) { alert("Ошибка файла!"); } e.target.value = ''; 
+            if (Array.isArray(imported)) { store.set('contacts', imported); renderContacts(imported); showModal("Ваши контакты были успешно восстановлены из файла.", "Импорт завершен", "✅"); }
+        } catch (err) { showModal("Произошла ошибка при чтении файла резервной копии.", "Ошибка файла", "❌"); } e.target.value = ''; 
     }; reader.readAsText(file);
 });
 
@@ -391,7 +440,11 @@ function resetCallUI() {
     document.getElementById('call-peer-name').innerText = "Семейная связь";
     
     callUi.msgInput.disabled = true; callUi.sendBtn.disabled = true;
+    callUi.msgInput.style.height = '40px';
+    callUi.msgInput.style.overflowY = 'hidden';
     callUi.fileLabel.style.opacity = '0.5'; callUi.fileLabel.style.pointerEvents = 'none';
+    callUi.emojiBtn.style.opacity = '0.5'; callUi.emojiBtn.style.pointerEvents = 'none';
+    callUi.emojiPicker.style.display = 'none';
     
     document.getElementById('toggle-mic').style.opacity = '1';
     document.getElementById('toggle-mic').style.textDecoration = 'none';
@@ -463,7 +516,7 @@ async function getAndAddMedia(kind) {
         }
     } catch (e) {
         console.error(e);
-        alert("Не удалось получить доступ к " + (kind === 'audio' ? 'микрофону' : 'камере'));
+        showModal("Не удалось получить доступ к " + (kind === 'audio' ? 'микрофону' : 'камере') + ".<br><br>Пожалуйста, проверьте системные разрешения вашего устройства.", "Ошибка доступа", "🚫");
     }
 }
 
@@ -476,6 +529,11 @@ async function initMedia(mode) {
         document.getElementById('toggle-cam').style.textDecoration = 'line-through';
         document.getElementById('toggle-mic').style.opacity = mode === 'chat' ? '0.5' : '1';
         document.getElementById('toggle-mic').style.textDecoration = mode === 'chat' ? 'line-through' : 'none';
+        
+        if (mode === 'chat') {
+            logSys("Режим чата. Нажмите иконку камеры или микрофона внизу, чтобы добавить их в любой момент.");
+            return;
+        }
     } else {
         videoPanel.style.display = 'flex';
         callUi.localVideo.style.display = 'block';
@@ -527,6 +585,8 @@ function startChat(targetIdStr) {
     callUi.msgInput.disabled = false;
     callUi.sendBtn.disabled = false;
     callUi.msgInput.placeholder = "Напишите сообщение...";
+    callUi.emojiBtn.style.opacity = '1';
+    callUi.emojiBtn.style.pointerEvents = 'auto';
     
     loadChatHistory(targetId);
     initMedia('chat');
@@ -609,9 +669,6 @@ function connectSignaling() {
         let msg; try { msg = JSON.parse(payload.message); } catch (err) { return; }
         if (msg.from === myId) return;
 
-        // Фильтр старых системных сообщений (любой служебный WebRTC пакет старше 30 секунд игнорируется)
-        const isOldMessage = msg.timestamp && (Date.now() - msg.timestamp > 30000);
-
         // --- ОБРАБОТКА ОФФЛАЙН-СООБЩЕНИЙ (им разрешено быть старыми) ---
         if (msg.type === 'direct_msg') {
             let history = store.get(`chat_${msg.from}`) || [];
@@ -641,8 +698,14 @@ function connectSignaling() {
             return; 
         }
 
-        // Если это старый звонок или старый маршрут WebRTC — отбрасываем
-        if (isOldMessage) return;
+        // --- ФИЛЬТР КЭШИРОВАННЫХ ЗВОНКОВ И WebRTC ---
+        // Игнорируем служебные пакеты, если:
+        // 1. У них нет метки времени (слишком старые пакеты из кэша сервера)
+        // 2. Они были отправлены ДО того, как мы открыли/обновили страницу (с допуском 10 сек)
+        // 3. Они в принципе старше 15 секунд
+        if (!msg.timestamp || msg.timestamp < appStartTime - 10000 || (Date.now() - msg.timestamp > 15000)) {
+            return;
+        }
 
         if (ringTimeout) clearTimeout(ringTimeout);
 
@@ -667,6 +730,8 @@ function connectSignaling() {
             callUi.msgInput.disabled = false;
             callUi.sendBtn.disabled = false;
             callUi.msgInput.placeholder = "Напишите сообщение...";
+            callUi.emojiBtn.style.opacity = '1';
+            callUi.emojiBtn.style.pointerEvents = 'auto';
             
             setupPeerConnection();
             
@@ -880,8 +945,8 @@ function setupDataChannel() {
 callUi.fileInput.addEventListener('change', () => {
     const file = callUi.fileInput.files[0];
     if (!file) return;
-    if (dataChannel?.readyState !== 'open') return alert("Дождитесь установки P2P соединения для передачи файлов!");
-    if (file.size > 20 * 1024 * 1024) return alert("Максимум 20 МБ");
+    if (dataChannel?.readyState !== 'open') return showModal("Для передачи файлов необходимо дождаться установки P2P соединения.", "Ожидание", "⏳");
+    if (file.size > 20 * 1024 * 1024) return showModal("Размер файла превышает допустимый лимит (20 МБ).", "Файл слишком большой", "📎");
 
     const reader = new FileReader();
     document.getElementById('file-progress-container').style.display = 'block';
@@ -1050,31 +1115,53 @@ function appendMsg(text, isMine, isHtml = false, saveToHistory = true, rawTextFo
     }
 }
 
+// --- АДАПТИВНОЕ ПОЛЕ ВВОДА И ОТПРАВКА ---
+callUi.msgInput.addEventListener('input', function() {
+    this.style.height = '40px'; 
+    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    this.style.overflowY = this.scrollHeight > 120 ? 'auto' : 'hidden';
+});
+
+callUi.msgInput.addEventListener('keydown', (e) => { 
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        callUi.sendBtn.click();
+    }
+});
+
 callUi.sendBtn.onclick = () => {
     const text = callUi.msgInput.value.trim();
     if (!text) return;
 
-    // Генерируем уникальный ID для сообщения
     const msgId = Date.now().toString() + Math.random().toString(36).substring(2, 6);
-    
     appendMsg(text, true, false, true, null, msgId); 
+    
     callUi.msgInput.value = '';
+    callUi.msgInput.style.height = '40px';
+    callUi.msgInput.style.overflowY = 'hidden';
 
-    // Если P2P туннель уже установлен — шлем через него напрямую (быстро)
     if (dataChannel?.readyState === 'open') {
         dataChannel.send(JSON.stringify({ type: 'text', text: text, id: msgId }));
     } else {
-        // Если P2P еще не установлен, шлем через сервер как оффлайн/асинхронное сообщение
         sendSignal(targetId, { type: 'direct_msg', text: text, id: msgId, from: myId });
     }
 };
-callUi.msgInput.onkeypress = (e) => { if (e.key === 'Enter') callUi.sendBtn.onclick(); };
 
 document.addEventListener('click', (e) => {
     if (!e.target.closest('#contacts-list li')) {
         document.querySelectorAll('#contacts-list li').forEach(el => el.classList.remove('show-actions'));
     }
 });
+
+// --- ФИКС КЛАВИАТУРЫ ДЛЯ МОБИЛЬНЫХ (VISUAL VIEWPORT) ---
+if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => {
+        document.body.style.height = window.visualViewport.height + 'px';
+        if (callMode !== 'idle') {
+            callUi.chatBox.scrollTop = callUi.chatBox.scrollHeight;
+        }
+    });
+}
 
 // --- 8. АВТОСКРЫТИЕ КНОПОК ПРИ НЕАКТИВНОСТИ ---
 let controlsTimeout;

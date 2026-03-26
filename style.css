@@ -62,7 +62,7 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
 .del-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 40px; display: flex; align-items: center; justify-content: center; color: #ccc; font-weight: bold; transition: opacity 0.2s; cursor: pointer; z-index: 5; }
 .del-handle:hover { color: #888; background: rgba(0,0,0,0.02); }
 
-/* Измененная скрытая панель с двумя кнопками */
+/* Скрытая панель с двумя кнопками */
 .swipe-actions { position: absolute; right: -100px; top: 0; bottom: 0; display: flex; transition: right 0.25s cubic-bezier(0.4, 0, 0.2, 1); z-index: 10; }
 .btn-edit, .btn-del { width: 50px; border: none; font-size: 16px; display: flex; align-items: center; justify-content: center; cursor: pointer; margin: 0; transition: background 0.2s; }
 .btn-edit { background: #fff8e1; color: #f57f17; border-left: 1px solid #ffecb3; }
@@ -89,9 +89,14 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
 .call-header { display: flex; justify-content: space-between; align-items: center; background: #2a2a3f; padding: 10px 15px; border-radius: 12px; flex-shrink: 0; z-index: 50; }
 .call-header h1 { margin: 0; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 8px; }
 .e2e-badge { font-size: 10px; background: #a6e3a1; color: #1e1e2e; padding: 3px 6px; border-radius: 4px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; }
-.status { color: #89b4fa; font-size: 13px; margin-top: 2px; font-weight: bold; }
+.status { color: #89b4fa; font-size: 13px; margin-top: 2px; font-weight: bold; transition: color 0.3s; }
 
-/* Main Container: position relative to hold floating controls, padding-bottom provides space so chat isn't hidden behind buttons */
+/* Системные логи (прозрачные) */
+.sys-logs { position: absolute; top: 75px; right: 15px; width: 250px; pointer-events: none; z-index: 1000; display: flex; flex-direction: column; gap: 6px; }
+.sys-log-item { background: rgba(30, 30, 46, 0.75); color: #cdd6f4; font-size: 11px; padding: 8px 12px; border-radius: 8px; border: 1px solid #45475a; backdrop-filter: blur(4px); box-shadow: 0 4px 6px rgba(0,0,0,0.2); animation: fadeout 4s forwards; }
+@keyframes fadeout { 0% { opacity: 0; transform: translateX(20px); } 10% { opacity: 1; transform: translateX(0); } 80% { opacity: 1; } 100% { opacity: 0; } }
+
+/* Main Container */
 .main-container { display: flex; flex: 1; gap: 15px; min-height: 0; flex-direction: row; position: relative; padding-bottom: 50px; }
 
 .video-panel { flex: 3; background: #000; border-radius: 12px; position: relative; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
@@ -99,7 +104,7 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
 #local-video { position: absolute; bottom: 15px; right: 15px; width: 120px; height: auto; border-radius: 8px; border: 2px solid #444; background: #222; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 10; transform: scaleX(-1); }
 .placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #888; font-size: 16px; background: #111; z-index: 5; text-align: center; padding: 20px; }
 
-/* Панель контроллеров вынесена наружу, всегда видна и лежит поверх (z-index) */
+/* Панель контроллеров */
 .controls { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; background: rgba(30, 30, 46, 0.85); padding: 8px 12px; border-radius: 30px; z-index: 100; backdrop-filter: blur(8px); flex-wrap: nowrap; justify-content: center; width: max-content; max-width: 95%; overflow-x: auto; border: 1px solid rgba(255,255,255,0.1); transition: opacity 0.4s ease, transform 0.4s ease; opacity: 1; }
 .ctrl-btn { background: #444; color: white; border: none; padding: 8px 12px; border-radius: 20px; cursor: pointer; font-weight: bold; transition: background 0.2s, opacity 0.2s; display: flex; align-items: center; gap: 5px; font-size: 13px; white-space: nowrap; }
 .ctrl-btn:hover { background: #555; }
@@ -157,7 +162,6 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
     
     .chat-panel { flex: 1; min-height: 150px; }
     
-    /* Делаем иконки на кнопках вместо текста для экономии места, где это возможно */
     #toggle-mic { font-size: 0; }
     #toggle-mic::before { content: "🎤"; font-size: 14px; }
     #toggle-cam { font-size: 0; }

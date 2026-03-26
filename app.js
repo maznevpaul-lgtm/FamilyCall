@@ -7,10 +7,14 @@ const store = {
 // --- 2. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И НАСТРОЙКИ WEBRTC ---
 const rtcConfig = { 
     iceServers: [
+        // Российские STUN серверы (Яндекс, SIPnet)
+        { urls: "stun:stun.yandex.ru:3478" },
+        { urls: "stun:stun.sipnet.ru:3478" },
+        // Международные серверы (Google, Cloudflare)
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun1.l.google.com:19302" },
-        { urls: "stun:stun2.l.google.com:19302" },
         { urls: "stun:stun.cloudflare.com:3478" },
+        // TURN серверы для обхода NAT (Metered)
         { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
         { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" }
     ] 
@@ -47,6 +51,14 @@ const callUi = {
     addUnknownBtn: document.getElementById('add-unknown-btn')
 };
 
+// --- ПОЛУЧИТЬ ИМЯ КОНТАКТА ПО ID ---
+function getContactName(id) {
+    if (!id) return "Неизвестный";
+    const contacts = store.get('contacts') || [];
+    const c = contacts.find(c => c.id === id);
+    return c ? c.name : id;
+}
+
 // --- 3. ИНИЦИАЛИЗАЦИЯ И ВКЛАДКИ ---
 function switchTab(tabId) {
     document.querySelectorAll('.view-container').forEach(el => el.classList.remove('active'));
@@ -81,6 +93,7 @@ function checkUnknownContact(id) {
                 store.set('contacts', contacts);
                 renderContacts(contacts);
                 callUi.addUnknownBtn.style.display = 'none';
+                document.getElementById('call-peer-name').innerText = name.trim();
                 logSys(`Контакт ${name} успешно сохранен.`);
             }
         };
@@ -151,11 +164,15 @@ function playHangupTone() {
     playPip(now); playPip(now + 0.4); playPip(now + 0.8);
 }
 
+// НОВЫЕ ТИХИЕ ЛОГИ ПОВЕРХ ЭКРАНА
 function logSys(text) {
+    const container = document.getElementById('sys-logs');
+    if (!container) return;
     const div = document.createElement('div');
-    div.style = "text-align: center; font-size: 11px; color: #a6adc8; margin: 8px 0; background: rgba(255,255,255,0.05); padding: 4px; border-radius: 4px;";
+    div.className = 'sys-log-item';
     div.innerText = "⚙️ " + text;
-    callUi.chatBox.appendChild(div); callUi.chatBox.scrollTop = callUi.chatBox.scrollHeight;
+    container.appendChild(div);
+    setTimeout(() => div.remove(), 4000);
 }
 
 // --- 5. ЛОГИКА АДРЕСНОЙ КНИГИ И НАСТРОЕК ---
@@ -371,6 +388,8 @@ function resetCallUI() {
     callUi.placeholder.style.display = 'flex'; 
     callUi.status.innerText = 'Ожидание действий...';
     callUi.status.style.color = '#89b4fa';
+    document.getElementById('call-peer-name').innerText = "Семейная связь";
+    
     callUi.msgInput.disabled = true; callUi.sendBtn.disabled = true;
     callUi.fileLabel.style.opacity = '0.5'; callUi.fileLabel.style.pointerEvents = 'none';
     
@@ -397,7 +416,6 @@ function loadChatHistory(id) {
     chatHistory.forEach(msg => appendMsg(msg.text, msg.isMine, msg.isHtml, false, null, msg.id));
 }
 
-// Принудительная отправка ключей при добавлении медиа "на лету"
 async function forceNegotiation() {
     if (!peerConnection) return;
     try {
@@ -458,11 +476,6 @@ async function initMedia(mode) {
         document.getElementById('toggle-cam').style.textDecoration = 'line-through';
         document.getElementById('toggle-mic').style.opacity = mode === 'chat' ? '0.5' : '1';
         document.getElementById('toggle-mic').style.textDecoration = mode === 'chat' ? 'line-through' : 'none';
-        
-        if (mode === 'chat') {
-            logSys("Вы в чате. Собеседник получит сообщение, как только откроет приложение.");
-            return;
-        }
     } else {
         videoPanel.style.display = 'flex';
         callUi.localVideo.style.display = 'block';
@@ -486,7 +499,7 @@ async function initMedia(mode) {
         }
         logSys(`Устройства активны (${mode})`);
     } catch (e) { 
-        logSys("⚠️ Ошибка: Доступ к медиа запрещен. Переход в текстовый режим."); 
+        logSys("Доступ к медиа не выдан."); 
         videoPanel.style.display = 'none';
         document.getElementById('toggle-cam').style.opacity = '0.5';
         document.getElementById('toggle-cam').style.textDecoration = 'line-through';
@@ -504,9 +517,10 @@ function startChat(targetIdStr) {
     iceCandidateQueue = [];
     switchTab('call');
     
+    document.getElementById('call-peer-name').innerText = getContactName(targetId);
     checkUnknownContact(targetId);
     
-    callUi.status.innerText = `Чат с ${targetId} (ожидание P2P...)`;
+    callUi.status.innerText = `Подключение...`;
     callUi.status.style.color = '#89b4fa';
     
     // Включаем поле ввода СРАЗУ, не дожидаясь WebRTC (Оффлайн-режим)
@@ -517,7 +531,7 @@ function startChat(targetIdStr) {
     loadChatHistory(targetId);
     initMedia('chat');
     
-    // Пытаемся тихо установить P2P-туннель в фоне
+    // Пытаемся установить P2P-туннель в фоне
     setupPeerConnection();
     dataChannel = peerConnection.createDataChannel('chatAndFiles');
     setupDataChannel();
@@ -526,6 +540,14 @@ function startChat(targetIdStr) {
         peerConnection.setLocalDescription(offer);
         sendSignal(targetId, { type: 'chat_offer', targetId, offer, from: myId });
     }).catch(e => console.error(e));
+
+    // Если WebRTC не собралось, меняем статус на оффлайн
+    setTimeout(() => {
+        if (callMode === 'call' && currentCallMode === 'chat' && (!peerConnection || peerConnection.connectionState !== 'connected')) {
+            callUi.status.innerText = "Чат (Оффлайн / Сервер)";
+            callUi.status.style.color = "#a6adc8";
+        }
+    }, 8000);
 
     wakeUpControls();
 }
@@ -542,9 +564,10 @@ function makeCall(targetIdStr, mode) {
     isCaller = true; 
     iceCandidateQueue = [];
     
+    document.getElementById('call-peer-name').innerText = getContactName(targetId);
     checkUnknownContact(targetId);
     
-    callUi.status.innerText = `Звоним ${targetId}...`;
+    callUi.status.innerText = `Звоним...`;
     
     loadChatHistory(targetId);
     
@@ -586,13 +609,12 @@ function connectSignaling() {
         let msg; try { msg = JSON.parse(payload.message); } catch (err) { return; }
         if (msg.from === myId) return;
 
-        // Фильтр старых системных сообщений (например, звонков, которые были 2 минуты назад)
-        const isOldMessage = msg.timestamp && (Date.now() - msg.timestamp > 60000);
+        // Фильтр старых системных сообщений (любой служебный WebRTC пакет старше 30 секунд игнорируется)
+        const isOldMessage = msg.timestamp && (Date.now() - msg.timestamp > 30000);
 
-        // --- ОБРАБОТКА ОФФЛАЙН-СООБЩЕНИЙ ---
+        // --- ОБРАБОТКА ОФФЛАЙН-СООБЩЕНИЙ (им разрешено быть старыми) ---
         if (msg.type === 'direct_msg') {
             let history = store.get(`chat_${msg.from}`) || [];
-            // Проверка на дубли (ntfy может прислать сообщение повторно при переподключении)
             const alreadyExists = history.some(m => m.id === msg.id);
             if (!alreadyExists) {
                 checkUnknownContact(msg.from);
@@ -602,27 +624,26 @@ function connectSignaling() {
 
                 // Если мы сейчас находимся в чате с этим пользователем
                 if (callMode !== 'idle' && targetId === msg.from) {
-                    appendMsg(msg.text, false, false, false, null, msg.id); // false = не сохранять снова
+                    appendMsg(msg.text, false, false, false, null, msg.id);
                     playMessageSound();
                 } else {
-                    // Уведомляем пользователя о новом сообщении
-                    if (document.getElementById('call-view').classList.contains('active') === false) {
+                    // Уведомляем пользователя о новом сообщении (красная точка)
+                    if (!document.getElementById('call-view').classList.contains('active')) {
                         document.getElementById('btn-call').innerText = "🖥️ Вызов 🔴";
                     }
                     playMessageSound();
                     if (window.Notification && Notification.permission === 'granted' && document.hidden) {
-                        const notif = new Notification("Новое сообщение", { body: msg.text });
+                        const notif = new Notification(getContactName(msg.from), { body: msg.text });
                         notif.onclick = function() { window.focus(); this.close(); };
                     }
                 }
             }
-            return; // Оффлайн сообщение обработано, дальше идти не нужно
+            return; 
         }
 
-        // Если это старый звонок или старый маршрут — игнорируем, чтобы не звонить в пустоту
+        // Если это старый звонок или старый маршрут WebRTC — отбрасываем
         if (isOldMessage) return;
 
-        logSys(`Сигнал: [${msg.type}]`);
         if (ringTimeout) clearTimeout(ringTimeout);
 
         // --- ОБРАБОТКА ТИХОГО ВХОДЯЩЕГО ЧАТА ---
@@ -637,12 +658,12 @@ function connectSignaling() {
             isCaller = false;
             iceCandidateQueue = [];
             
+            document.getElementById('call-peer-name').innerText = getContactName(targetId);
             checkUnknownContact(targetId);
 
             loadChatHistory(targetId);
             initMedia('chat'); 
             
-            // Открываем ввод для ответа
             callUi.msgInput.disabled = false;
             callUi.sendBtn.disabled = false;
             callUi.msgInput.placeholder = "Напишите сообщение...";
@@ -671,13 +692,13 @@ function connectSignaling() {
             
             let typeText = currentCallMode === 'video' ? '📹 Видеозвонок' : (currentCallMode === 'audio' ? '📞 Голосовой звонок' : '💬 Текстовый чат');
             if (window.Notification && Notification.permission === 'granted' && document.hidden) {
-                const notif = new Notification("Входящий вызов!", { body: `Вам звонит: ${targetId} (${typeText})` });
+                const notif = new Notification("Входящий вызов!", { body: `Вам звонит: ${getContactName(targetId)} (${typeText})` });
                 notif.onclick = function() { window.focus(); this.close(); };
             }
 
             document.getElementById('incoming-ring-ui').style.display = 'block';
             document.getElementById('incoming-canceled-ui').style.display = 'none';
-            callUi.incomingCallerId.innerText = targetId;
+            callUi.incomingCallerId.innerText = getContactName(targetId);
             document.getElementById('incoming-call-type').innerText = typeText;
 
             callUi.incomingOverlay.style.display = 'flex';
@@ -736,7 +757,6 @@ function connectSignaling() {
 
         if (msg.type === 'answer') {
             await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.answer));
-            logSys("P2P Ключи синхронизированы");
             processIceQueue();
         }
 
@@ -763,7 +783,8 @@ setInterval(() => {
 
 document.getElementById('accept-call-btn').onclick = async () => {
     stopRingtone(); callUi.incomingOverlay.style.display = 'none'; callMode = 'answer'; switchTab('call');
-    callUi.status.innerText = `Соединение с ${targetId}...`;
+    document.getElementById('call-peer-name').innerText = getContactName(targetId);
+    callUi.status.innerText = `Соединение...`;
     sendSignal(targetId, { type: 'accept', targetId, from: myId });
     loadChatHistory(targetId); await initMedia(currentCallMode); setupVideoSwap();
     wakeUpControls();
@@ -833,7 +854,7 @@ function setupDataChannel() {
             }
 
             if (window.Notification && Notification.permission === 'granted' && document.hidden) {
-                const notif = new Notification("Новое сообщение", { body: msg.text });
+                const notif = new Notification(getContactName(targetId), { body: msg.text });
                 notif.onclick = function() { window.focus(); this.close(); };
             }
         } 

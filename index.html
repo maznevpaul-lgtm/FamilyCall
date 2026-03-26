@@ -61,9 +61,13 @@
 
     <!-- ВКЛАДКА 2: ЗВОНОК И ЧАТ -->
     <div id="call-view" class="view-container">
+        
+        <!-- Блок для прозрачных системных логов поверх видео -->
+        <div id="sys-logs" class="sys-logs"></div>
+
         <div class="call-header">
             <div style="min-width: 0; flex: 1;">
-                <h1>Семейная связь <span class="e2e-badge" title="Соединение зашифровано (End-to-End)">🔒 E2EE</span> <button id="add-unknown-btn" style="display: none; background: #a6e3a1; color: #1e1e2e; border: none; padding: 4px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-weight: bold; flex-shrink: 0; transition: transform 0.2s;">➕ Сохранить</button></h1>
+                <h1><span id="call-peer-name">Семейная связь</span> <span class="e2e-badge" title="Соединение зашифровано (End-to-End)">🔒 E2EE</span> <button id="add-unknown-btn" style="display: none; background: #a6e3a1; color: #1e1e2e; border: none; padding: 4px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-weight: bold; flex-shrink: 0; transition: transform 0.2s;">➕ Сохранить</button></h1>
                 <div id="call-status" class="status">Ожидание действий...</div>
             </div>
         </div>

@@ -23,13 +23,13 @@ let currentCallMode = 'video';
 let currentFacingMode = 'user'; 
 let ringTimeout, chatHistory = [];
 let isScreenSharing = false, isVideoSwapped = false;
-const CHUNK_SIZE = 16384; // 16 KB для отправки файлов без зависаний
+const CHUNK_SIZE = 16384; 
 let fileReceiveBuffer = [], incomingFileInfo = null;
 
 let isCaller = false; 
 let iceCandidateQueue = [];
+let currentSessionId = null; // Новая защита от старых звонков и рассинхрона
 
-const appStartTime = Date.now();
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 let dialInterval = null, ringInterval = null;
 
@@ -51,6 +51,7 @@ const callUi = {
     addUnknownBtn: document.getElementById('add-unknown-btn')
 };
 
+// --- ПОЛУЧИТЬ ИМЯ КОНТАКТА ПО ID ---
 function getContactName(id) {
     if (!id) return "Неизвестный";
     const contacts = store.get('contacts') || [];
@@ -58,6 +59,7 @@ function getContactName(id) {
     return c ? c.name : id;
 }
 
+// --- УНИВЕРСАЛЬНАЯ МОДАЛКА ---
 function showModal(text, title = "Уведомление", icon = "ℹ️", isConfirm = false, onOk = null) {
     document.getElementById('custom-alert-title').innerText = title;
     document.getElementById('custom-alert-text').innerHTML = text; 
@@ -72,6 +74,7 @@ function showModal(text, title = "Уведомление", icon = "ℹ️", isCo
     cancelBtn.onclick = () => { document.getElementById('custom-alert-modal').style.display = 'none'; };
 }
 
+// --- 3. ИНИЦИАЛИЗАЦИЯ И ВКЛАДКИ ---
 function switchTab(tabId) {
     document.querySelectorAll('.view-container').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
@@ -127,12 +130,29 @@ document.getElementById('save-unknown-btn').addEventListener('click', () => {
     
     callUi.addUnknownBtn.style.display = 'none';
     document.getElementById('call-peer-name').innerText = name;
+    logSys(`Контакт сохранен`);
     document.getElementById('add-unknown-modal').style.display = 'none';
 });
 
-// --- АУДИО ЭФФЕКТЫ ---
-function playRingtone() { /* ... */ }
+// --- 4. АУДИО ---
+function playRingtone() {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const doubleRing = () => {
+        const playRingPip = (t) => {
+            const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+            osc.frequency.value = 480; osc.connect(gain); gain.connect(audioCtx.destination);
+            gain.gain.setValueAtTime(0, t); gain.gain.linearRampToValueAtTime(0.3, t + 0.05); 
+            gain.gain.setValueAtTime(0.3, t + 0.35); gain.gain.linearRampToValueAtTime(0, t + 0.4);
+            osc.start(t); osc.stop(t + 0.4);
+        };
+        const now = audioCtx.currentTime;
+        playRingPip(now); playRingPip(now + 0.6);
+    };
+    doubleRing();
+    ringInterval = setInterval(doubleRing, 3000);
+}
 function stopRingtone() { if (ringInterval) clearInterval(ringInterval); ringInterval = null; }
+
 function playMessageSound() {
     if (audioCtx.state === 'suspended') audioCtx.resume();
     const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
@@ -141,11 +161,42 @@ function playMessageSound() {
     gain.gain.setValueAtTime(0, audioCtx.currentTime); gain.gain.linearRampToValueAtTime(0.1, audioCtx.currentTime + 0.02); gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2);
     osc.start(audioCtx.currentTime); osc.stop(audioCtx.currentTime + 0.2);
 }
-function playDialTone() { /* ... */ }
-function stopDialTone() { if (dialInterval) clearInterval(dialInterval); dialInterval = null; }
-function playSuccessTone() { /* ... */ }
-function playHangupTone() { /* ... */ }
 
+function playDialTone() {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const beep = () => {
+        const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+        osc.frequency.value = 425; osc.connect(gain); gain.connect(audioCtx.destination);
+        gain.gain.setValueAtTime(0, audioCtx.currentTime); gain.gain.linearRampToValueAtTime(0.1, audioCtx.currentTime + 0.05);
+        gain.gain.setValueAtTime(0.1, audioCtx.currentTime + 0.95); gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 1.0);
+        osc.start(audioCtx.currentTime); osc.stop(audioCtx.currentTime + 1.0);
+    };
+    beep(); dialInterval = setInterval(beep, 4000); 
+}
+function stopDialTone() { if (dialInterval) clearInterval(dialInterval); dialInterval = null; }
+
+function playHangupTone() {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const playPip = (t) => {
+        const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+        osc.frequency.value = 300; osc.connect(gain); gain.connect(audioCtx.destination);
+        gain.gain.setValueAtTime(0, t); gain.gain.linearRampToValueAtTime(0.2, t + 0.05); gain.gain.setValueAtTime(0.2, t + 0.25); gain.gain.linearRampToValueAtTime(0, t + 0.3);
+        osc.start(t); osc.stop(t + 0.3);
+    };
+    const now = audioCtx.currentTime;
+    playPip(now); playPip(now + 0.4); playPip(now + 0.8);
+}
+
+function logSys(text) {
+    const logEl = document.getElementById('sys-log-text');
+    if (!logEl) return;
+    logEl.innerText = "⚙️ " + text;
+    logEl.style.opacity = '1';
+    clearTimeout(logEl.timeout);
+    logEl.timeout = setTimeout(() => { logEl.style.opacity = '0'; }, 4000);
+}
+
+// --- 5. ЛОГИКА АДРЕСНОЙ КНИГИ И НАСТРОЕК ---
 function renderContacts(contacts) {
     const list = document.getElementById('contacts-list');
     list.innerHTML = ''; 
@@ -296,7 +347,18 @@ async function requestMediaPermissions() {
         document.getElementById('test-video').srcObject = testStream;
         document.getElementById('test-video').style.transform = currentFacingMode === 'user' ? 'scaleX(-1)' : 'none';
         document.getElementById('settings-switch-cam').style.display = 'block';
-        // ... (audio analyzer setup remains the same)
+        
+        const source = audioCtx.createMediaStreamSource(testStream);
+        analyzer = audioCtx.createAnalyser(); analyzer.fftSize = 256; source.connect(analyzer);
+        const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+        if (micInterval) clearInterval(micInterval);
+        micInterval = setInterval(() => {
+            analyzer.getByteFrequencyData(dataArray);
+            let sum = 0; for(let i=0; i < dataArray.length; i++) sum += dataArray[i];
+            let level = Math.min(100, ((sum / dataArray.length) / 80) * 100); 
+            document.getElementById('mic-level').style.width = level + '%';
+            document.getElementById('mic-level').style.background = level > 85 ? '#f44336' : (level > 50 ? '#ff9800' : '#4caf50');
+        }, 50);
         document.getElementById('req-perm-btn').innerText = "✅ Разрешения получены";
         document.getElementById('req-perm-btn').style.background = "#4caf50";
     } catch (e) { 
@@ -311,10 +373,13 @@ document.getElementById('settings-btn').addEventListener('click', () => {
     document.getElementById('req-perm-btn').style.background = "#1976d2";
     requestMediaPermissions();
 });
+
 document.getElementById('req-perm-btn').addEventListener('click', requestMediaPermissions);
+
 document.getElementById('close-settings-btn').addEventListener('click', () => {
     document.getElementById('settings-modal').style.display = 'none';
     if (testStream) testStream.getTracks().forEach(t => t.stop());
+    if (micInterval) clearInterval(micInterval); testStream = null;
 });
 
 document.getElementById('export-btn').addEventListener('click', () => {
@@ -336,9 +401,11 @@ document.getElementById('import-file').addEventListener('change', (e) => {
     }; reader.readAsText(file);
 });
 
-// --- 6. УМНАЯ ОТПРАВКА СИГНАЛОВ С АВТОПОСТОРОМ ---
+// --- 6. СЕТЕВОЙ СЛОЙ (NTFY) ---
 async function sendSignal(target, data, retryCount = 0) {
     data.timestamp = Date.now(); 
+    if (currentSessionId && !data.sessionId) data.sessionId = currentSessionId;
+    
     try {
         const response = await fetch(`https://ntfy.sh/p2p_call_${target}`, { 
             method: 'POST', 
@@ -376,7 +443,7 @@ function resetCallUI() {
         isVideoSwapped = false;
         isCaller = false;
         iceCandidateQueue = [];
-        return; // Остаемся в чате!
+        return; 
     }
 
     stopDialTone(); stopRingtone();
@@ -408,6 +475,7 @@ function resetCallUI() {
     isVideoSwapped = false;
     isCaller = false;
     iceCandidateQueue = [];
+    currentSessionId = null; // Сброс сессии
     
     callUi.localVideo.className = 'pip';
     callUi.remoteVideo.className = 'fullscreen';
@@ -422,7 +490,6 @@ function loadChatHistory(id) {
     chatHistory.forEach(msg => appendMsg(msg.text, msg.isMine, msg.isHtml, false, null, msg.id, msg.delivered, msg.timestamp));
 }
 
-// Обработка галочек доставки
 function handleAck(msgId, peerId) {
     if (!peerId) peerId = targetId;
     let history = store.get(`chat_${peerId}`) || [];
@@ -533,6 +600,7 @@ async function startChat(targetIdStr) {
     callMode = 'call';
     isCaller = true;
     iceCandidateQueue = [];
+    currentSessionId = Math.random().toString(36).substr(2, 9); // Уникальная сессия
     
     store.set(`unread_${targetId}`, 0);
     renderContacts(store.get('contacts') || []);
@@ -585,6 +653,7 @@ async function makeCall(targetIdStr, mode) {
     callMode = 'call'; 
     isCaller = true; 
     iceCandidateQueue = [];
+    currentSessionId = Math.random().toString(36).substr(2, 9); // Уникальная сессия
     
     store.set(`unread_${targetId}`, 0);
     renderContacts(store.get('contacts') || []);
@@ -594,15 +663,16 @@ async function makeCall(targetIdStr, mode) {
     document.getElementById('call-peer-name').innerText = getContactName(targetId);
     checkUnknownContact(targetId);
     
-    callUi.status.innerText = `Звоним...`;
+    callUi.status.innerText = `Подготовка медиа...`;
     
     loadChatHistory(targetId);
     
-    // ДОЖИДАЕМСЯ инициализации камеры до отправки звонка
     await initMedia(mode);
     
+    callUi.status.innerText = `Звоним...`;
     sendSignal(targetId, { type: 'ring', targetId, from: myId, callType: mode });
     playDialTone(); 
+    
     ringTimeout = setTimeout(() => {
         if (!peerConnection || peerConnection.connectionState !== 'connected') {
             stopDialTone(); playHangupTone(); 
@@ -634,44 +704,42 @@ function connectSignaling() {
         let msg; try { msg = JSON.parse(payload.message); } catch (err) { return; }
         if (msg.from === myId) return;
 
-        // --- ОБРАБОТКА ОФФЛАЙН-СООБЩЕНИЙ ---
+        // --- 1. ТЕКСТОВЫЕ СООБЩЕНИЯ И ГАЛОЧКИ ДОСТАВКИ (Работают всегда и фильтруются по ID) ---
         if (msg.type === 'direct_msg') {
             const senderId = msg.from;
             let history = store.get(`chat_${senderId}`) || [];
             
-            const alreadyExists = history.some(m => m.id === msg.id);
-            const lastMsgTime = history.length > 0 ? history[history.length - 1].timestamp : 0;
-            const isZombie = !alreadyExists && msg.timestamp && (msg.timestamp < lastMsgTime - 300000);
+            // Если сообщение уже есть в истории - игнорируем
+            if (history.some(m => m.id === msg.id)) return;
 
-            if (!alreadyExists && !isZombie) {
-                sendSignal(senderId, { type: 'ack', id: msg.id, from: myId });
+            // Шлем галочку доставки обратно
+            sendSignal(senderId, { type: 'ack', id: msg.id, from: myId });
 
-                checkUnknownContact(senderId);
-                history.push({ id: msg.id, text: msg.text, isMine: false, isHtml: false, timestamp: msg.timestamp || Date.now(), delivered: true });
-                if (history.length > 100) history.shift();
-                store.set(`chat_${senderId}`, history);
+            checkUnknownContact(senderId);
+            history.push({ id: msg.id, text: msg.text, isMine: false, isHtml: false, timestamp: msg.timestamp || Date.now(), delivered: true });
+            if (history.length > 100) history.shift();
+            store.set(`chat_${senderId}`, history);
 
-                const isViewingActiveChat = callMode !== 'idle' && targetId === senderId && document.getElementById('call-view').classList.contains('active');
+            const isViewingActiveChat = callMode !== 'idle' && targetId === senderId && document.getElementById('call-view').classList.contains('active');
+            
+            if (isViewingActiveChat) {
+                appendMsg(msg.text, false, false, false, null, msg.id, true, msg.timestamp);
+                playMessageSound();
+            } else {
+                const currentUnread = store.get(`unread_${senderId}`) || 0;
+                store.set(`unread_${senderId}`, currentUnread + 1);
+                renderContacts(store.get('contacts') || []);
                 
-                if (isViewingActiveChat) {
-                    appendMsg(msg.text, false, false, false, null, msg.id, true, msg.timestamp);
-                    playMessageSound();
-                } else {
-                    const currentUnread = store.get(`unread_${senderId}`) || 0;
-                    store.set(`unread_${senderId}`, currentUnread + 1);
-                    renderContacts(store.get('contacts') || []);
-                    
-                    if (callMode !== 'idle' && targetId === senderId && !document.getElementById('call-view').classList.contains('active')) {
-                        document.getElementById('btn-call').innerText = "🖥️ Вызов 🔴";
-                    } else if (targetId !== senderId) {
-                        document.getElementById('btn-contacts').innerText = "📞 Контакты 🔴";
-                    }
+                if (callMode !== 'idle' && targetId === senderId && !document.getElementById('call-view').classList.contains('active')) {
+                    document.getElementById('btn-call').innerText = "🖥️ Вызов 🔴";
+                } else if (targetId !== senderId) {
+                    document.getElementById('btn-contacts').innerText = "📞 Контакты 🔴";
+                }
 
-                    playMessageSound();
-                    if (window.Notification && Notification.permission === 'granted' && document.hidden) {
-                        const notif = new Notification(getContactName(senderId), { body: msg.text });
-                        notif.onclick = function() { window.focus(); this.close(); };
-                    }
+                playMessageSound();
+                if (window.Notification && Notification.permission === 'granted' && document.hidden) {
+                    const notif = new Notification(getContactName(senderId), { body: msg.text });
+                    notif.onclick = function() { window.focus(); this.close(); };
                 }
             }
             return; 
@@ -682,12 +750,19 @@ function connectSignaling() {
             return;
         }
 
-        // --- УМНЫЙ ФИЛЬТР ВРЕМЕНИ ДЛЯ СТАРЫХ СЛУЖЕБНЫХ ПАКЕТОВ ---
-        const isHistoryPlayback = (Date.now() - appStartTime) < 3000;
-        if (isHistoryPlayback) return; 
+        // --- 2. СИСТЕМНЫЕ СИГНАЛЫ ЗВОНКА (Строгая фильтрация по Сессиям и Времени) ---
+        
+        // Отбрасываем старые звонки (отставание более 3 минут)
+        if (msg.timestamp && Math.abs(Date.now() - msg.timestamp) > 180000) return;
 
         if (ringTimeout) clearTimeout(ringTimeout);
 
+        // Игнорируем пакеты от других сессий (чужие или старые)
+        if (msg.type !== 'ring' && msg.type !== 'chat_offer') {
+            if (currentSessionId && msg.sessionId && msg.sessionId !== currentSessionId) return;
+        }
+
+        // Разрешение одновременного звонка (Glare)
         if ((msg.type === 'chat_offer' || msg.type === 'ring') && callMode !== 'idle') {
             if (targetId === msg.from && myId > msg.from) {
                 isCaller = false; 
@@ -702,6 +777,7 @@ function connectSignaling() {
             callMode = 'answer';
             currentCallMode = 'chat';
             isCaller = false;
+            currentSessionId = msg.sessionId;
             
             document.getElementById('call-peer-name').innerText = getContactName(targetId);
             checkUnknownContact(targetId);
@@ -731,10 +807,12 @@ function connectSignaling() {
         }
 
         if (msg.type === 'ring' && callMode === 'idle') {
-            targetId = msg.from; callMode = 'incoming';
+            targetId = msg.from; 
+            callMode = 'incoming';
             currentCallMode = msg.callType || 'video';
             isCaller = false;
             iceCandidateQueue = [];
+            currentSessionId = msg.sessionId;
             
             checkUnknownContact(targetId);
             
@@ -763,7 +841,6 @@ function connectSignaling() {
                 setTimeout(() => { callUi.incomingOverlay.style.display = 'none'; resetCallUI(); }, 2500);
             } else if (callMode === 'call' || callMode === 'answer') {
                 if (currentCallMode === 'chat') return; 
-                
                 stopDialTone();
                 playHangupTone();
                 callUi.status.innerText = "Собеседник завершил вызов";
@@ -785,7 +862,6 @@ function connectSignaling() {
                 callUi.status.innerText = "Чат (Сервер)";
                 return;
             }
-            
             stopDialTone(); playHangupTone(); 
             if (msg.reason === 'busy') {
                 callUi.status.innerText = "Абонент занят";
@@ -798,10 +874,7 @@ function connectSignaling() {
 
         if (msg.type === 'offer') {
             if (!peerConnection) setupPeerConnection();
-            
-            if (peerConnection.signalingState !== "stable" && !isCaller) {
-                return; 
-            }
+            if (peerConnection.signalingState !== "stable" && !isCaller) return; 
 
             await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.offer));
             const answer = await peerConnection.createAnswer();
@@ -848,8 +921,8 @@ document.getElementById('accept-call-btn').onclick = async () => {
     
     loadChatHistory(targetId); 
     
-    // Сначала инициализируем камеру/микрофон, и только потом отвечаем
     await initMedia(currentCallMode); 
+    setupVideoSwap();
     
     callUi.status.innerText = `Соединение...`;
     sendSignal(targetId, { type: 'accept', targetId, from: myId });
@@ -914,6 +987,7 @@ function setupPeerConnection() {
         }
         else if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'closed') {
             if (currentCallMode === 'chat') {
+                logSys("P2P отключен (работает сервер)");
                 callUi.status.innerText = "Чат (Сервер)";
                 callUi.status.style.color = "#a6adc8";
                 document.querySelector('.video-panel').style.display = 'none';
@@ -929,7 +1003,6 @@ function setupPeerConnection() {
 }
 
 function setupDataChannel() {
-    // ВАЖНО: Устанавливаем бинарный тип данных для корректной передачи тяжелых файлов!
     dataChannel.binaryType = 'arraybuffer';
     
     dataChannel.onopen = () => {
@@ -941,7 +1014,6 @@ function setupDataChannel() {
     };
     
     dataChannel.onmessage = (e) => {
-        // --- 1. ОБРАБОТКА БИНАРНЫХ КУСКОВ ФАЙЛА (ArrayBuffer) ---
         if (e.data instanceof ArrayBuffer) {
             if (incomingFileInfo) {
                 fileReceiveBuffer.push(e.data);
@@ -951,7 +1023,6 @@ function setupDataChannel() {
             return;
         }
         
-        // --- 2. ОБРАБОТКА ТЕКСТОВЫХ И JSON ДАННЫХ ---
         let msg;
         try { msg = JSON.parse(e.data); } catch(err) { return; }
         
@@ -1001,7 +1072,6 @@ function setupDataChannel() {
         else if (msg.type === 'file-end') {
             document.getElementById('file-progress-container').style.display = 'none';
             
-            // Создаем настоящий скачиваемый Blob (работает на телефонах)
             const blob = new Blob(fileReceiveBuffer);
             const url = URL.createObjectURL(blob);
             
@@ -1016,7 +1086,6 @@ function setupDataChannel() {
     };
 }
 
-// НОВАЯ ЛОГИКА ОТПРАВКИ ФАЙЛОВ: БИНАРНЫЙ СТРИМИНГ (ЗАЩИТА ОТ ЗАВИСАНИЙ И ОШИБОК ПАМЯТИ)
 callUi.fileInput.addEventListener('change', () => {
     const file = callUi.fileInput.files[0];
     if (!file) return;
@@ -1042,7 +1111,6 @@ callUi.fileInput.addEventListener('change', () => {
             return;
         }
 
-        // Если буфер переполнен, ждем (защищает браузер от зависания и крашей)
         if (dataChannel.bufferedAmount > 1024 * 1024) {
             setTimeout(sendNextChunk, 50);
             return;
@@ -1050,11 +1118,10 @@ callUi.fileInput.addEventListener('change', () => {
 
         const slice = file.slice(offset, offset + CHUNK_SIZE);
         reader.onload = (e) => {
-            dataChannel.send(e.target.result); // Отправляем бинарный ArrayBuffer
+            dataChannel.send(e.target.result);
             offset += slice.size;
             document.getElementById('file-progress-bar').style.width = `${(offset / file.size) * 100}%`;
             
-            // Пропуск тика Event Loop раз в 50 чанков, чтобы не вешать интерфейс пользователя
             if (offset % (CHUNK_SIZE * 50) === 0) {
                 setTimeout(sendNextChunk, 0);
             } else {
@@ -1073,7 +1140,6 @@ async function switchCameraTrack(streamHolder, videoElement, isCall) {
     
     currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
     try {
-        // Получаем новый поток ДО остановки старого, чтобы экран не мигал черным
         const newStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacingMode } });
         const newVideoTrack = newStream.getVideoTracks()[0];
 
@@ -1133,7 +1199,6 @@ document.getElementById('toggle-cam').onclick = async function() {
 document.getElementById('share-screen').onclick = async function() {
     if (!peerConnection) return;
     
-    // Проверка поддержки на мобильных устройствах
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
         showModal("Ваш браузер или мобильное устройство не поддерживает демонстрацию экрана.", "Не поддерживается", "📱");
         return;
@@ -1199,10 +1264,9 @@ callUi.hangupBtn.onclick = () => {
     }
 };
 
-// Новый алгоритм смены видео CSS классами (PIP) для надежности на телефонах
 function setupVideoSwap() {
     const togglePipSwap = (e) => {
-        if(e) e.preventDefault(); // Защита от двойного тапа на телефоне
+        if(e) e.preventDefault(); 
         isVideoSwapped = !isVideoSwapped;
         if (isVideoSwapped) {
             callUi.localVideo.classList.remove('pip');
@@ -1224,7 +1288,7 @@ setupVideoSwap();
 function escapeHTML(str) { return str.replace(/[&<>'"]/g, tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)); }
 
 function appendMsg(text, isMine, isHtml = false, saveToHistory = true, rawTextForHistory = null, msgId = null, isDelivered = false, timestamp = null) {
-    if (!text) return; // Защита от пустых сообщений
+    if (!text) return; 
     const div = document.createElement('div');
     div.className = `msg ${isMine ? 'msg-mine' : 'msg-peer'}`; 
     
@@ -1256,7 +1320,6 @@ function appendMsg(text, isMine, isHtml = false, saveToHistory = true, rawTextFo
     }
 }
 
-// --- АДАПТИВНОЕ ПОЛЕ ВВОДА И ОТПРАВКА ---
 callUi.msgInput.addEventListener('input', function() {
     this.style.height = '40px'; 
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
@@ -1296,7 +1359,6 @@ document.addEventListener('click', (e) => {
     }
 });
 
-// --- ФИКС КЛАВИАТУРЫ ДЛЯ МОБИЛЬНЫХ (VISUAL VIEWPORT) ---
 if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', () => {
         document.body.style.height = window.visualViewport.height + 'px';
@@ -1306,7 +1368,6 @@ if (window.visualViewport) {
     });
 }
 
-// --- 8. АВТОСКРЫТИЕ КНОПОК ПРИ НЕАКТИВНОСТИ ---
 let controlsTimeout;
 const callView = document.getElementById('call-view');
 const controlsEl = document.querySelector('.controls');
@@ -1336,7 +1397,6 @@ controlsEl.addEventListener('mouseleave', wakeUpControls);
 
 wakeUpControls();
 
-// --- 9. ЗАПРОС РАЗРЕШЕНИЙ НА УВЕДОМЛЕНИЯ ---
 document.body.addEventListener('click', () => {
     if (window.Notification && Notification.permission === 'default') {
         Notification.requestPermission();

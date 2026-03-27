@@ -30,6 +30,7 @@ let isCaller = false;
 let iceCandidateQueue = [];
 let currentSessionId = null; // Новая защита от старых звонков и рассинхрона
 
+const appStartTime = Date.now();
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 let dialInterval = null, ringInterval = null;
 
@@ -403,7 +404,6 @@ document.getElementById('import-file').addEventListener('change', (e) => {
 
 // --- 6. СЕТЕВОЙ СЛОЙ (NTFY) ---
 async function sendSignal(target, data, retryCount = 0) {
-    data.timestamp = Date.now(); 
     if (currentSessionId && !data.sessionId) data.sessionId = currentSessionId;
     
     try {
@@ -752,7 +752,7 @@ function connectSignaling() {
 
         // --- 2. СИСТЕМНЫЕ СИГНАЛЫ ЗВОНКА (Строгая фильтрация по Сессиям и Времени) ---
         
-        // Отбрасываем старые звонки (отставание более 3 минут)
+        // Отбрасываем старые звонки из кэша (отставание более 3 минут)
         if (msg.timestamp && Math.abs(Date.now() - msg.timestamp) > 180000) return;
 
         if (ringTimeout) clearTimeout(ringTimeout);

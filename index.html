@@ -506,7 +506,10 @@
 
         // --- 5. PEERJS: ЗАМЕНА СИГНАЛЬНОГО СЕРВЕРА ---
         function initPeer() {
-            document.getElementById('my-id-display').innerText = "Подключение...";
+            // Сразу показываем наш ID (даже если еще не подключились к серверу)
+            document.getElementById('my-id-display').innerText = myId;
+            document.getElementById('my-id-display').style.color = "#888"; // Серый цвет, пока подключаемся
+            callUi.status.innerText = "Подключение к серверу...";
             
             // Настройки WebRTC серверов
             const rtcConfig = { 
@@ -524,7 +527,21 @@
             peer.on('open', (id) => {
                 myId = id;
                 document.getElementById('my-id-display').innerText = id;
+                document.getElementById('my-id-display').style.color = "#0d47a1"; // Синий - успешно
                 store.set('myId', id);
+                
+                if (callMode === 'idle') {
+                    callUi.status.innerText = "В сети (PeerJS)";
+                    callUi.status.style.color = "#a6e3a1";
+                }
+            });
+
+            peer.on('disconnected', () => {
+                if (callMode === 'idle') {
+                    callUi.status.innerText = "Переподключение...";
+                    callUi.status.style.color = "#f9e2af";
+                }
+                setTimeout(() => { if(peer && peer.disconnected) peer.reconnect(); }, 2000);
             });
 
             // Обработка ВХОДЯЩИХ текстовых/управляющих соединений
@@ -550,7 +567,19 @@
 
             peer.on('error', (err) => {
                 console.error("PeerJS Error:", err);
-                if (err.type === 'peer-unavailable') {
+                if (err.type === 'unavailable-id') {
+                    // Если ID случайно совпал с чужим, генерируем новый
+                    myId = Math.random().toString(36).substring(2, 8).toUpperCase();
+                    store.set('myId', myId);
+                    initPeer();
+                } else if (err.type === 'network' || err.type === 'server-error') {
+                    document.getElementById('my-id-display').style.color = "#f44336"; // Красный
+                    if (callMode === 'idle') {
+                        callUi.status.innerText = "Ошибка сервера. Ждем...";
+                        callUi.status.style.color = "#f38ba8";
+                    }
+                    setTimeout(initPeer, 5000); // Пробуем снова через 5 сек
+                } else if (err.type === 'peer-unavailable') {
                     stopDialTone(); playHangupTone();
                     callUi.status.innerText = "Абонент не в сети";
                     callUi.status.style.color = "#f38ba8";

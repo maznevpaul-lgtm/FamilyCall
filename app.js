@@ -417,7 +417,6 @@ document.getElementById('import-file').addEventListener('change', (e) => {
 });
 
 // --- 6. УМНАЯ ОТПРАВКА СИГНАЛОВ С АВТОПОСТОРОМ ---
-// Защита от потери сообщений из-за лимитов сервера
 async function sendSignal(target, data, retryCount = 0) {
     data.timestamp = Date.now(); 
     try {
@@ -426,12 +425,10 @@ async function sendSignal(target, data, retryCount = 0) {
             body: JSON.stringify(data) 
         });
         
-        // 429 = Too Many Requests. Ждем и повторяем.
         if (!response.ok && response.status === 429 && retryCount < 5) {
             setTimeout(() => sendSignal(target, data, retryCount + 1), 1500 * (retryCount + 1));
         }
     } catch (err) {
-        // Ошибка сети. Ждем и повторяем.
         if (retryCount < 5) {
             setTimeout(() => sendSignal(target, data, retryCount + 1), 1500 * (retryCount + 1));
         } else {
@@ -441,7 +438,6 @@ async function sendSignal(target, data, retryCount = 0) {
 }
 
 function resetCallUI() {
-    // Если мы в режиме текстового чата, не выкидываем пользователя в контакты!
     if (currentCallMode === 'chat') {
         if (peerConnection) { peerConnection.close(); peerConnection = null; }
         if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
@@ -465,7 +461,6 @@ function resetCallUI() {
         return; // Остаемся в чате!
     }
 
-    // Если это был звонок (Аудио/Видео), то полностью сбрасываем и возвращаемся
     stopDialTone(); stopRingtone();
     if (peerConnection) { peerConnection.close(); peerConnection = null; }
     if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
@@ -615,7 +610,7 @@ async function initMedia(mode) {
     }
 }
 
-function startChat(targetIdStr) {
+async function startChat(targetIdStr) {
     targetId = targetIdStr.toUpperCase();
     currentCallMode = 'chat';
     callMode = 'call';
@@ -640,16 +635,17 @@ function startChat(targetIdStr) {
     callUi.emojiBtn.style.pointerEvents = 'auto';
     
     loadChatHistory(targetId);
-    initMedia('chat');
+    await initMedia('chat');
     
     setupPeerConnection();
     dataChannel = peerConnection.createDataChannel('chatAndFiles');
     setupDataChannel();
     
-    peerConnection.createOffer().then(offer => {
-        peerConnection.setLocalDescription(offer);
+    try {
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
         sendSignal(targetId, { type: 'chat_offer', targetId, offer, from: myId });
-    }).catch(e => console.log(e));
+    } catch (e) { console.error(e); }
 
     setTimeout(() => {
         if (callMode === 'call' && currentCallMode === 'chat' && (!peerConnection || peerConnection.connectionState !== 'connected')) {
@@ -661,7 +657,7 @@ function startChat(targetIdStr) {
     wakeUpControls();
 }
 
-function makeCall(targetIdStr, mode) {
+async function makeCall(targetIdStr, mode) {
     if (mode === 'chat') {
         startChat(targetIdStr);
         return;
@@ -685,17 +681,18 @@ function makeCall(targetIdStr, mode) {
     
     loadChatHistory(targetId);
     
-    initMedia(mode).then(() => {
-        sendSignal(targetId, { type: 'ring', targetId, from: myId, callType: mode });
-        playDialTone(); 
-        ringTimeout = setTimeout(() => {
-            if (!peerConnection || peerConnection.connectionState !== 'connected') {
-                stopDialTone(); playHangupTone(); 
-                callUi.status.innerText = "Нет ответа"; callUi.status.style.color = "#f38ba8";
-                setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 3000);
-            }
-        }, 20000);
-    });
+    // ДОЖИДАЕМСЯ инициализации камеры до отправки звонка
+    await initMedia(mode);
+    
+    sendSignal(targetId, { type: 'ring', targetId, from: myId, callType: mode });
+    playDialTone(); 
+    ringTimeout = setTimeout(() => {
+        if (!peerConnection || peerConnection.connectionState !== 'connected') {
+            stopDialTone(); playHangupTone(); 
+            callUi.status.innerText = "Нет ответа"; callUi.status.style.color = "#f38ba8";
+            setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 3000);
+        }
+    }, 20000);
     
     wakeUpControls();
 }
@@ -724,16 +721,11 @@ function connectSignaling() {
         if (msg.type === 'direct_msg') {
             let history = store.get(`chat_${msg.from}`) || [];
             
-            // Строгая проверка на дубли из старой истории
             const alreadyExists = history.some(m => m.id === msg.id);
             const lastMsgTime = history.length > 0 ? history[history.length - 1].timestamp : 0;
-            
-            // Отбрасываем, если это сообщение сильно старше наших последних сообщений 
-            // (защита от "зомби" сообщений, которые всплывают после обрезки истории до 100 шт)
             const isZombie = !alreadyExists && msg.timestamp && (msg.timestamp < lastMsgTime - 300000);
 
             if (!alreadyExists && !isZombie) {
-                // Шлем галочку доставки обратно
                 sendSignal(msg.from, { type: 'ack', id: msg.id, from: myId });
 
                 checkUnknownContact(msg.from);
@@ -774,19 +766,17 @@ function connectSignaling() {
         }
 
         // --- УМНЫЙ ФИЛЬТР ВРЕМЕНИ ДЛЯ СТАРЫХ СЛУЖЕБНЫХ ПАКЕТОВ ---
-        // Любой системный пакет WebRTC старше 30 секунд - просто мусор из кэша
-        if (!msg.timestamp || msg.timestamp < appStartTime - 10000 || (Date.now() - msg.timestamp > 30000)) {
-            return;
+        const isHistoryPlayback = (Date.now() - appStartTime) < 3000;
+        if (isHistoryPlayback) {
+            return; // Полностью игнорируем любые системные WebRTC сигналы при запуске приложения (защита от зомби-звонков)
         }
 
         if (ringTimeout) clearTimeout(ringTimeout);
 
-        // --- РАЗРЕШЕНИЕ КОНФЛИКТА (Оба позвонили одновременно) ---
         if ((msg.type === 'chat_offer' || msg.type === 'ring') && callMode !== 'idle') {
             if (targetId === msg.from && myId > msg.from) {
-                isCaller = false; // Я уступаю роль звонящего
+                isCaller = false; 
             } else if (targetId !== msg.from) {
-                // Если я звоню одному, а мне звонит другой - отбиваем
                 sendSignal(msg.from, { type: 'reject', targetId: msg.from, from: myId, reason: 'busy' });
                 return;
             }
@@ -833,9 +823,9 @@ function connectSignaling() {
             
             checkUnknownContact(targetId);
             
-            let typeText = currentCallMode === 'video' ? '📹 Видеозвонок' : (currentCallMode === 'audio' ? '📞 Голосовой звонок' : '💬 Текстовый чат');
+            let typeText = currentCallMode === 'video' ? '📹 ВИДЕОЗВОНОК' : (currentCallMode === 'audio' ? '📞 ГОЛОСОВОЙ ЗВОНОК' : '💬 ТЕКСТОВЫЙ ЧАТ');
             if (window.Notification && Notification.permission === 'granted' && document.hidden) {
-                const notif = new Notification("Входящий вызов!", { body: `Вам звонит: ${getContactName(targetId)} (${typeText})` });
+                const notif = new Notification("Входящий вызов!", { body: `Вам звонит: ${getContactName(targetId)}` });
                 notif.onclick = function() { window.focus(); this.close(); };
             }
 
@@ -857,7 +847,7 @@ function connectSignaling() {
                 document.getElementById('incoming-canceled-ui').style.display = 'block';
                 setTimeout(() => { callUi.incomingOverlay.style.display = 'none'; resetCallUI(); }, 2500);
             } else if (callMode === 'call' || callMode === 'answer') {
-                if (currentCallMode === 'chat') return; // В чате не сбрасываем окно!
+                if (currentCallMode === 'chat') return; 
                 
                 stopDialTone();
                 playHangupTone();
@@ -894,7 +884,9 @@ function connectSignaling() {
         if (msg.type === 'offer') {
             if (!peerConnection) setupPeerConnection();
             
-            if (peerConnection.signalingState !== "stable" && !isCaller) return; 
+            if (peerConnection.signalingState !== "stable" && !isCaller) {
+                return; 
+            }
 
             await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.offer));
             const answer = await peerConnection.createAnswer();
@@ -938,8 +930,14 @@ document.getElementById('accept-call-btn').onclick = async () => {
 
     document.getElementById('call-peer-name').innerText = getContactName(targetId);
     callUi.status.innerText = `Соединение...`;
+    
+    loadChatHistory(targetId); 
+    
+    // КРИТИЧНО: Дожидаемся инициализации камеры ДО ТОГО, как сказать абоненту, что мы готовы
+    await initMedia(currentCallMode); 
+    setupVideoSwap();
+    
     sendSignal(targetId, { type: 'accept', targetId, from: myId });
-    loadChatHistory(targetId); await initMedia(currentCallMode); setupVideoSwap();
     wakeUpControls();
 };
 
@@ -958,7 +956,6 @@ function setupPeerConnection() {
 
     if (localStream) localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
-    // Умная буферизация ICE маршрутов (отправляем пачкой раз в 2 секунды)
     peerConnection.onicecandidate = (e) => { 
         if (e.candidate) {
             candidateBuffer.push(e.candidate);
@@ -967,8 +964,17 @@ function setupPeerConnection() {
                     sendSignal(targetId, { type: 'candidates', targetId, candidates: candidateBuffer, from: myId });
                     candidateBuffer = [];
                     candidateTimer = null;
-                }, 2000);
+                }, 1000);
             }
+        }
+    };
+
+    peerConnection.onicegatheringstatechange = () => {
+        if (peerConnection.iceGatheringState === 'complete' && candidateBuffer.length > 0) {
+            if (candidateTimer) clearTimeout(candidateTimer);
+            sendSignal(targetId, { type: 'candidates', targetId, candidates: candidateBuffer, from: myId });
+            candidateBuffer = [];
+            candidateTimer = null;
         }
     };
     
@@ -1203,15 +1209,9 @@ callUi.hangupBtn.onclick = () => {
     if (callMode !== 'idle') {
         sendSignal(targetId, { type: 'cancel', targetId, from: myId });
     }
-    
-    if (currentCallMode === 'chat') {
-        resetCallUI();
-        switchTab('contacts');
-    } else {
-        playHangupTone();
-        callUi.status.innerText = "Завершение...";
-        setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 1000); 
-    }
+    playHangupTone();
+    callUi.status.innerText = "Завершение...";
+    setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 1000); 
 };
 
 function setupVideoSwap() {

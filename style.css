@@ -130,8 +130,8 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
 #send-btn:hover:not(:disabled) { background: #b4befe; }
 #send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* Окно выбора эмодзи вынесено наверх */
-.emoji-picker { display: none; position: absolute; bottom: calc(100% + 5px); right: 15px; background: #313244; border: 1px solid #45475a; border-radius: 8px; padding: 10px; grid-template-columns: repeat(6, 1fr); gap: 8px; z-index: 100; max-height: 40vh; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+/* Окно выбора эмодзи: жестко зафиксирована высота, чтобы не скрывалось за краем */
+.emoji-picker { display: none; position: absolute; bottom: calc(100% + 5px); right: 15px; background: #313244; border: 1px solid #45475a; border-radius: 8px; padding: 10px; grid-template-columns: repeat(6, 1fr); gap: 8px; z-index: 100; max-height: 200px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
 .emoji-item { cursor: pointer; font-size: 22px; text-align: center; transition: transform 0.1s; user-select: none; }
 .emoji-item:hover { transform: scale(1.2); }
 
@@ -179,5 +179,7 @@ body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Ver
     #incoming-overlay > div { width: 100%; }
     #incoming-overlay .call-buttons { display: flex; flex-direction: column; gap: 15px; align-items: center; margin-top: 30px; }
     .call-btn-acc, .call-btn-rej { width: 100%; max-width: 250px; }
-    .emoji-picker { right: 10px; left: 10px; grid-template-columns: repeat(8, 1fr); max-height: 35vh; }
+    
+    /* Эмодзи пикер для телефона (фиксируем высоту, чтобы не прятался) */
+    .emoji-picker { right: 10px; left: 10px; grid-template-columns: repeat(8, 1fr); max-height: 180px; }
 }

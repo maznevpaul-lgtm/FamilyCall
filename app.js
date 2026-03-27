@@ -28,9 +28,8 @@ let fileReceiveBuffer = [], incomingFileInfo = null;
 
 let isCaller = false; 
 let iceCandidateQueue = [];
-let currentSessionId = null; // Новая защита от старых звонков и рассинхрона
+let currentSessionId = null; 
 
-const appStartTime = Date.now();
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 let dialInterval = null, ringInterval = null;
 
@@ -52,7 +51,6 @@ const callUi = {
     addUnknownBtn: document.getElementById('add-unknown-btn')
 };
 
-// --- ПОЛУЧИТЬ ИМЯ КОНТАКТА ПО ID ---
 function getContactName(id) {
     if (!id) return "Неизвестный";
     const contacts = store.get('contacts') || [];
@@ -60,7 +58,6 @@ function getContactName(id) {
     return c ? c.name : id;
 }
 
-// --- УНИВЕРСАЛЬНАЯ МОДАЛКА ---
 function showModal(text, title = "Уведомление", icon = "ℹ️", isConfirm = false, onOk = null) {
     document.getElementById('custom-alert-title').innerText = title;
     document.getElementById('custom-alert-text').innerHTML = text; 
@@ -75,7 +72,6 @@ function showModal(text, title = "Уведомление", icon = "ℹ️", isCo
     cancelBtn.onclick = () => { document.getElementById('custom-alert-modal').style.display = 'none'; };
 }
 
-// --- 3. ИНИЦИАЛИЗАЦИЯ И ВКЛАДКИ ---
 function switchTab(tabId) {
     document.querySelectorAll('.view-container').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));

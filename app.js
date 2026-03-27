@@ -7,14 +7,11 @@ const store = {
 // --- 2. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И НАСТРОЙКИ WEBRTC ---
 const rtcConfig = { 
     iceServers: [
-        // Российские STUN серверы (Яндекс, SIPnet)
         { urls: "stun:stun.yandex.ru:3478" },
         { urls: "stun:stun.sipnet.ru:3478" },
-        // Международные серверы (Google, Cloudflare)
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun1.l.google.com:19302" },
         { urls: "stun:stun.cloudflare.com:3478" },
-        // TURN серверы для обхода NAT (Metered)
         { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
         { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" }
     ] 
@@ -32,7 +29,9 @@ let fileReceiveBuffer = [], incomingFileInfo = null;
 let isCaller = false; 
 let iceCandidateQueue = [];
 
+// Фиксируем время запуска для отбрасывания зомби-сигналов из кэша сервера
 const appStartTime = Date.now();
+
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 let dialInterval = null, ringInterval = null;
 
@@ -199,7 +198,7 @@ function playSuccessTone() {
     osc.start(now); osc.stop(now + 0.4);
 }
 
-// НОВЫЕ ТИХИЕ ЛОГИ
+// НОВЫЕ ТИХИЕ ЛОГИ РЯДОМ СО СТАТУСОМ
 function logSys(text) {
     const logEl = document.getElementById('sys-log-text');
     if (!logEl) return;
@@ -275,8 +274,7 @@ function renderContacts(contacts) {
     });
 
     document.querySelectorAll('.btn-call-video, .btn-call-audio, .btn-call-chat').forEach(btn => btn.addEventListener('click', (e) => {
-        // Предотвращаем срабатывание клика по всей карточке, если нажали конкретную кнопку связи
-        e.stopPropagation();
+        e.stopPropagation(); // Не переходим просто в чат, если нажали на видео/аудио кнопку
         makeCall(e.currentTarget.getAttribute('data-id'), e.currentTarget.getAttribute('data-mode'));
     }));
     
@@ -418,13 +416,56 @@ document.getElementById('import-file').addEventListener('change', (e) => {
     }; reader.readAsText(file);
 });
 
-// --- 6. ЛОГИКА ВЫЗОВОВ И СИГНАЛЬНЫЙ СЕРВЕР ---
-function sendSignal(target, data) {
+// --- 6. УМНАЯ ОТПРАВКА СИГНАЛОВ С АВТОПОСТОРОМ ---
+// Защита от потери сообщений из-за лимитов сервера
+async function sendSignal(target, data, retryCount = 0) {
     data.timestamp = Date.now(); 
-    fetch(`https://ntfy.sh/p2p_call_${target}`, { method: 'POST', body: JSON.stringify(data) }).catch(() => {});
+    try {
+        const response = await fetch(`https://ntfy.sh/p2p_call_${target}`, { 
+            method: 'POST', 
+            body: JSON.stringify(data) 
+        });
+        
+        // 429 = Too Many Requests. Ждем и повторяем.
+        if (!response.ok && response.status === 429 && retryCount < 5) {
+            setTimeout(() => sendSignal(target, data, retryCount + 1), 1500 * (retryCount + 1));
+        }
+    } catch (err) {
+        // Ошибка сети. Ждем и повторяем.
+        if (retryCount < 5) {
+            setTimeout(() => sendSignal(target, data, retryCount + 1), 1500 * (retryCount + 1));
+        } else {
+            logSys("Ошибка отправки данных (нет сети)");
+        }
+    }
 }
 
 function resetCallUI() {
+    // Если мы в режиме текстового чата, не выкидываем пользователя в контакты!
+    if (currentCallMode === 'chat') {
+        if (peerConnection) { peerConnection.close(); peerConnection = null; }
+        if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+        if (screenStream) { screenStream.getTracks().forEach(t => t.stop()); screenStream = null; }
+        
+        callUi.localVideo.srcObject = null; callUi.remoteVideo.srcObject = null;
+        document.querySelector('.video-panel').style.display = 'none';
+        
+        callUi.status.innerText = 'Чат (Сервер)';
+        callUi.status.style.color = '#a6adc8';
+        
+        document.getElementById('toggle-mic').style.opacity = '0.5';
+        document.getElementById('toggle-mic').style.textDecoration = 'line-through';
+        document.getElementById('toggle-cam').style.opacity = '0.5';
+        document.getElementById('toggle-cam').style.textDecoration = 'line-through';
+        callUi.fileLabel.style.opacity = '0.5'; callUi.fileLabel.style.pointerEvents = 'none';
+        
+        isVideoSwapped = false;
+        isCaller = false;
+        iceCandidateQueue = [];
+        return; // Остаемся в чате!
+    }
+
+    // Если это был звонок (Аудио/Видео), то полностью сбрасываем и возвращаемся
     stopDialTone(); stopRingtone();
     if (peerConnection) { peerConnection.close(); peerConnection = null; }
     if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
@@ -467,7 +508,7 @@ function loadChatHistory(id) {
     chatHistory.forEach(msg => appendMsg(msg.text, msg.isMine, msg.isHtml, false, null, msg.id, msg.delivered, msg.timestamp));
 }
 
-// Обработка галочек
+// Обработка галочек доставки
 function handleAck(msgId, peerId) {
     if (!peerId) peerId = targetId;
     let history = store.get(`chat_${peerId}`) || [];
@@ -493,9 +534,7 @@ async function forceNegotiation() {
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
         sendSignal(targetId, { type: 'offer', targetId, offer, from: myId });
-    } catch (err) {
-        console.error("Ошибка при запросе соединения:", err);
-    }
+    } catch (err) {}
 }
 
 async function getAndAddMedia(kind) {
@@ -533,7 +572,6 @@ async function getAndAddMedia(kind) {
             logSys("Микрофон включен.");
         }
     } catch (e) {
-        console.error(e);
         showModal("Не удалось получить доступ к " + (kind === 'audio' ? 'микрофону' : 'камере') + ".<br><br>Пожалуйста, проверьте системные разрешения вашего устройства.", "Ошибка доступа", "🚫");
     }
 }
@@ -592,7 +630,7 @@ function startChat(targetIdStr) {
     document.getElementById('call-peer-name').innerText = getContactName(targetId);
     checkUnknownContact(targetId);
     
-    callUi.status.innerText = `Подключение...`;
+    callUi.status.innerText = `Ожидание P2P...`;
     callUi.status.style.color = '#89b4fa';
     
     callUi.msgInput.disabled = false;
@@ -611,7 +649,7 @@ function startChat(targetIdStr) {
     peerConnection.createOffer().then(offer => {
         peerConnection.setLocalDescription(offer);
         sendSignal(targetId, { type: 'chat_offer', targetId, offer, from: myId });
-    }).catch(e => console.error(e));
+    }).catch(e => console.log(e));
 
     setTimeout(() => {
         if (callMode === 'call' && currentCallMode === 'chat' && (!peerConnection || peerConnection.connectionState !== 'connected')) {
@@ -685,9 +723,17 @@ function connectSignaling() {
         // --- ОБРАБОТКА ОФФЛАЙН-СООБЩЕНИЙ ---
         if (msg.type === 'direct_msg') {
             let history = store.get(`chat_${msg.from}`) || [];
+            
+            // Строгая проверка на дубли из старой истории
             const alreadyExists = history.some(m => m.id === msg.id);
-            if (!alreadyExists) {
-                // Шлем галочку обратно
+            const lastMsgTime = history.length > 0 ? history[history.length - 1].timestamp : 0;
+            
+            // Отбрасываем, если это сообщение сильно старше наших последних сообщений 
+            // (защита от "зомби" сообщений, которые всплывают после обрезки истории до 100 шт)
+            const isZombie = !alreadyExists && msg.timestamp && (msg.timestamp < lastMsgTime - 300000);
+
+            if (!alreadyExists && !isZombie) {
+                // Шлем галочку доставки обратно
                 sendSignal(msg.from, { type: 'ack', id: msg.id, from: myId });
 
                 checkUnknownContact(msg.from);
@@ -721,23 +767,26 @@ function connectSignaling() {
             return; 
         }
 
-        // Получение галочки доставки
+        // Получение галочки доставки от собеседника
         if (msg.type === 'ack') {
             handleAck(msg.id, msg.from);
             return;
         }
 
         // --- УМНЫЙ ФИЛЬТР ВРЕМЕНИ ДЛЯ СТАРЫХ СЛУЖЕБНЫХ ПАКЕТОВ ---
+        // Любой системный пакет WebRTC старше 30 секунд - просто мусор из кэша
         if (!msg.timestamp || msg.timestamp < appStartTime - 10000 || (Date.now() - msg.timestamp > 30000)) {
             return;
         }
 
         if (ringTimeout) clearTimeout(ringTimeout);
 
+        // --- РАЗРЕШЕНИЕ КОНФЛИКТА (Оба позвонили одновременно) ---
         if ((msg.type === 'chat_offer' || msg.type === 'ring') && callMode !== 'idle') {
             if (targetId === msg.from && myId > msg.from) {
-                isCaller = false; 
-            } else {
+                isCaller = false; // Я уступаю роль звонящего
+            } else if (targetId !== msg.from) {
+                // Если я звоню одному, а мне звонит другой - отбиваем
                 sendSignal(msg.from, { type: 'reject', targetId: msg.from, from: myId, reason: 'busy' });
                 return;
             }
@@ -797,6 +846,8 @@ function connectSignaling() {
 
             callUi.incomingOverlay.style.display = 'flex';
             playRingtone();
+        } else if (msg.type === 'ring' && callMode !== 'idle') {
+            sendSignal(msg.from, { type: 'reject', targetId: msg.from, from: myId, reason: 'busy' });
         }
 
         if (msg.type === 'cancel') {
@@ -806,6 +857,8 @@ function connectSignaling() {
                 document.getElementById('incoming-canceled-ui').style.display = 'block';
                 setTimeout(() => { callUi.incomingOverlay.style.display = 'none'; resetCallUI(); }, 2500);
             } else if (callMode === 'call' || callMode === 'answer') {
+                if (currentCallMode === 'chat') return; // В чате не сбрасываем окно!
+                
                 stopDialTone();
                 playHangupTone();
                 callUi.status.innerText = "Собеседник завершил вызов";
@@ -823,6 +876,11 @@ function connectSignaling() {
         }
 
         if (msg.type === 'reject' && callMode === 'call') {
+            if (currentCallMode === 'chat') {
+                callUi.status.innerText = "Чат (Сервер)";
+                return;
+            }
+            
             stopDialTone(); playHangupTone(); 
             if (msg.reason === 'busy') {
                 callUi.status.innerText = "Абонент занят";
@@ -836,9 +894,7 @@ function connectSignaling() {
         if (msg.type === 'offer') {
             if (!peerConnection) setupPeerConnection();
             
-            if (peerConnection.signalingState !== "stable" && !isCaller) {
-                return; 
-            }
+            if (peerConnection.signalingState !== "stable" && !isCaller) return; 
 
             await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.offer));
             const answer = await peerConnection.createAnswer();
@@ -902,6 +958,7 @@ function setupPeerConnection() {
 
     if (localStream) localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
+    // Умная буферизация ICE маршрутов (отправляем пачкой раз в 2 секунды)
     peerConnection.onicecandidate = (e) => { 
         if (e.candidate) {
             candidateBuffer.push(e.candidate);
@@ -910,7 +967,7 @@ function setupPeerConnection() {
                     sendSignal(targetId, { type: 'candidates', targetId, candidates: candidateBuffer, from: myId });
                     candidateBuffer = [];
                     candidateTimer = null;
-                }, 800);
+                }, 2000);
             }
         }
     };
@@ -931,22 +988,29 @@ function setupPeerConnection() {
     
     peerConnection.onconnectionstatechange = () => {
         if (peerConnection.connectionState === 'connected') {
-            callUi.status.innerText = "✅ P2P соединение установлено"; 
+            callUi.status.innerText = "✅ P2P соединено"; 
             callUi.status.style.color = "#a6e3a1"; 
         }
         else if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'closed') {
-            playHangupTone();
-            callUi.status.innerText = "Связь прервана";
-            callUi.status.style.color = "#f38ba8";
-            callUi.placeholder.style.display = 'flex';
-            setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 2000);
+            if (currentCallMode === 'chat') {
+                logSys("P2P отключен (работает сервер)");
+                callUi.status.innerText = "Чат (Сервер)";
+                callUi.status.style.color = "#a6adc8";
+                document.querySelector('.video-panel').style.display = 'none';
+            } else {
+                playHangupTone();
+                callUi.status.innerText = "Связь прервана";
+                callUi.status.style.color = "#f38ba8";
+                callUi.placeholder.style.display = 'flex';
+                setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 2000);
+            }
         }
     };
 }
 
 function setupDataChannel() {
     dataChannel.onopen = () => {
-        callUi.status.innerText = "✅ P2P соединение установлено"; callUi.status.style.color = "#a6e3a1"; 
+        callUi.status.innerText = "✅ P2P соединено"; callUi.status.style.color = "#a6e3a1"; 
         callUi.msgInput.disabled = false; callUi.sendBtn.disabled = false; 
         
         callUi.fileLabel.style.opacity = '0.8'; callUi.fileLabel.style.pointerEvents = 'auto';
@@ -956,12 +1020,10 @@ function setupDataChannel() {
     dataChannel.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type === 'text') { 
-            // Отправляем галочку доставки
             if (dataChannel?.readyState === 'open') {
                 dataChannel.send(JSON.stringify({ type: 'ack', id: msg.id }));
             }
             
-            // Защита от дублей в WebRTC
             let history = store.get(`chat_${msg.senderId}`) || [];
             if (history.some(m => m.id === msg.id)) return;
 
@@ -1141,9 +1203,15 @@ callUi.hangupBtn.onclick = () => {
     if (callMode !== 'idle') {
         sendSignal(targetId, { type: 'cancel', targetId, from: myId });
     }
-    playHangupTone();
-    callUi.status.innerText = "Завершение...";
-    setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 1000); 
+    
+    if (currentCallMode === 'chat') {
+        resetCallUI();
+        switchTab('contacts');
+    } else {
+        playHangupTone();
+        callUi.status.innerText = "Завершение...";
+        setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 1000); 
+    }
 };
 
 function setupVideoSwap() {

@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Семейная P2P Связь</title>
-    <!-- Подключаем PeerJS для стабильного сигнального сервера -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js"></script>
+    <!-- Подключаем надежный MQTT клиент для обхода блокировок -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     
     <style>
         /* ========================================== */
@@ -357,12 +357,19 @@
             set: (key, value) => { localStorage.setItem(key, JSON.stringify(value)); }
         };
 
-        // --- 2. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ---
-        let peer; // Объект PeerJS
-        let dataConnection; // Соединение для чата/команд
-        let mediaCall; // Медиа-звонок PeerJS
-        
+        // --- 2. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ WEBRTC & MQTT ---
+        const rtcConfig = { 
+            iceServers: [
+                { urls: "stun:stun.l.google.com:19302" },
+                { urls: "stun:stun1.l.google.com:19302" },
+                { urls: "stun:stun.cloudflare.com:3478" }
+            ] 
+        };
+
+        let mqttClient; 
+        let peerConnection, dataChannel;
         let localStream, screenStream;
+        
         let myId = store.get('myId');
         let targetId = null; 
         let callMode = 'idle'; // idle, calling, incoming, active
@@ -370,6 +377,9 @@
         let currentFacingMode = 'user'; 
         let ringTimeout, chatHistory = [];
         let isScreenSharing = false, isVideoSwapped = false;
+        
+        const CHUNK_SIZE = 16384; 
+        let fileReceiveBuffer = [], incomingFileInfo = null;
 
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         let dialInterval = null, ringInterval = null;
@@ -504,183 +514,247 @@
             const now = audioCtx.currentTime; playPip(now); playPip(now + 0.4); playPip(now + 0.8);
         }
 
-        // --- 5. PEERJS: ЗАМЕНА СИГНАЛЬНОГО СЕРВЕРА ---
-        function initPeer() {
-            // Сразу показываем наш ID (даже если еще не подключились к серверу)
+        // --- 5. ПРОМЫШЛЕННЫЙ СИГНАЛЬНЫЙ СЕРВЕР (MQTT) ---
+        function initMQTT() {
             document.getElementById('my-id-display').innerText = myId;
-            document.getElementById('my-id-display').style.color = "#888"; // Серый цвет, пока подключаемся
-            callUi.status.innerText = "Подключение к серверу...";
+            document.getElementById('my-id-display').style.color = "#888"; 
+            callUi.status.innerText = "Подключение к MQTT...";
             
-            // Настройки WebRTC серверов
-            const rtcConfig = { 
-                iceServers: [
-                    { urls: "stun:stun.l.google.com:19302" },
-                    { urls: "stun:stun1.l.google.com:19302" },
-                    { urls: "stun:stun.cloudflare.com:3478" },
-                    { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" }
-                ] 
-            };
+            // Используем мощный публичный брокер EMQX (не блокируется)
+            mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
+                clean: true,
+                connectTimeout: 4000,
+                reconnectPeriod: 2000
+            });
 
-            if (peer) peer.destroy();
-            peer = new Peer(myId, { config: rtcConfig, debug: 1 });
-
-            peer.on('open', (id) => {
-                myId = id;
-                document.getElementById('my-id-display').innerText = id;
+            mqttClient.on('connect', () => {
+                // Подписываемся на наш личный "канал" связи
+                mqttClient.subscribe(`family_p2p_${myId}`);
                 document.getElementById('my-id-display').style.color = "#0d47a1"; // Синий - успешно
-                store.set('myId', id);
                 
                 if (callMode === 'idle') {
-                    callUi.status.innerText = "В сети (PeerJS)";
+                    callUi.status.innerText = "В сети (Защищено)";
                     callUi.status.style.color = "#a6e3a1";
                 }
             });
 
-            peer.on('disconnected', () => {
+            mqttClient.on('message', async (topic, message) => {
+                let data;
+                try { data = JSON.parse(message.toString()); } catch(e) { return; }
+                if (data.from === myId) return; // Игнорируем свои же пакеты
+                
+                handleSignal(data);
+            });
+
+            mqttClient.on('error', (err) => {
+                document.getElementById('my-id-display').style.color = "#f44336"; 
                 if (callMode === 'idle') {
-                    callUi.status.innerText = "Переподключение...";
+                    callUi.status.innerText = "Поиск сети...";
                     callUi.status.style.color = "#f9e2af";
                 }
-                setTimeout(() => { if(peer && peer.disconnected) peer.reconnect(); }, 2000);
             });
-
-            // Обработка ВХОДЯЩИХ текстовых/управляющих соединений
-            peer.on('connection', (conn) => {
-                setupDataConnection(conn);
-            });
-
-            // Обработка ВХОДЯЩИХ медиа-звонков
-            peer.on('call', (call) => {
-                mediaCall = call;
-                call.on('stream', (remoteStream) => {
-                    callUi.remoteVideo.srcObject = remoteStream;
-                    document.querySelector('.video-panel').style.display = 'flex';
-                    callUi.remoteVideo.style.display = 'block';
-                    callUi.localVideo.style.display = 'block';
-                    callUi.placeholder.style.display = 'none';
-                    callUi.status.innerText = "✅ Соединение установлено";
-                    callUi.status.style.color = "#a6e3a1";
-                });
-                call.on('close', resetCallUI);
-                call.on('error', resetCallUI);
-            });
-
-            peer.on('error', (err) => {
-                console.error("PeerJS Error:", err);
-                if (err.type === 'unavailable-id') {
-                    // Если ID случайно совпал с чужим, генерируем новый
-                    myId = Math.random().toString(36).substring(2, 8).toUpperCase();
-                    store.set('myId', myId);
-                    initPeer();
-                } else if (err.type === 'network' || err.type === 'server-error') {
-                    document.getElementById('my-id-display').style.color = "#f44336"; // Красный
-                    if (callMode === 'idle') {
-                        callUi.status.innerText = "Ошибка сервера. Ждем...";
-                        callUi.status.style.color = "#f38ba8";
-                    }
-                    setTimeout(initPeer, 5000); // Пробуем снова через 5 сек
-                } else if (err.type === 'peer-unavailable') {
-                    stopDialTone(); playHangupTone();
-                    callUi.status.innerText = "Абонент не в сети";
+            
+            mqttClient.on('offline', () => {
+                if (callMode === 'idle') {
+                    callUi.status.innerText = "Нет интернета";
                     callUi.status.style.color = "#f38ba8";
-                    setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 3000);
                 }
             });
         }
 
-        // --- 6. ЛОГИКА СОЕДИНЕНИЯ И ЧАТА ---
-        function setupDataConnection(conn) {
-            conn.on('open', () => {
-                enableChatUI();
-            });
+        function sendSignal(target, payload) {
+            if (mqttClient && mqttClient.connected) {
+                payload.from = myId;
+                // Отправляем пакет в канал собеседника
+                mqttClient.publish(`family_p2p_${target}`, JSON.stringify(payload));
+            }
+        }
 
-            conn.on('data', (data) => {
-                if (data.type === 'ring') {
-                    // Нам звонят!
-                    if (callMode !== 'idle') {
-                        conn.send({ type: 'reject', reason: 'busy' });
-                        return;
-                    }
-                    targetId = conn.peer;
-                    dataConnection = conn;
-                    callMode = 'incoming';
-                    currentCallMode = data.callType;
-                    
-                    checkUnknownContact(targetId);
-                    
-                    document.getElementById('incoming-ring-ui').style.display = 'block';
-                    document.getElementById('incoming-canceled-ui').style.display = 'none';
-                    callUi.incomingCallerId.innerText = getContactName(targetId);
-                    document.getElementById('incoming-call-type').innerText = currentCallMode === 'video' ? '📹 ВИДЕОЗВОНОК' : (currentCallMode === 'audio' ? '📞 ГОЛОСОВОЙ ЗВОНОК' : '💬 ЧАТ');
-                    
-                    callUi.incomingOverlay.style.display = 'flex';
-                    playRingtone();
+        // --- 6. ЛОГИКА СОЕДИНЕНИЯ (NATIVE WEBRTC) ---
+        async function handleSignal(msg) {
+            // 1. Входящий звонок
+            if (msg.type === 'ring') {
+                if (callMode !== 'idle') {
+                    sendSignal(msg.from, { type: 'reject', reason: 'busy' });
+                    return;
                 }
-                else if (data.type === 'cancel') {
-                    stopRingtone();
-                    document.getElementById('incoming-ring-ui').style.display = 'none';
-                    document.getElementById('incoming-canceled-ui').style.display = 'block';
-                    setTimeout(() => { callUi.incomingOverlay.style.display = 'none'; resetCallUI(); }, 2000);
-                }
-                else if (data.type === 'accept') {
-                    // Абонент ответил на наш звонок. Запускаем медиа!
-                    stopDialTone();
-                    callUi.status.innerText = "Установка связи...";
-                    if (currentCallMode !== 'chat' && localStream) {
-                        mediaCall = peer.call(targetId, localStream);
-                        mediaCall.on('stream', (remoteStream) => {
-                            callUi.remoteVideo.srcObject = remoteStream;
-                            document.querySelector('.video-panel').style.display = 'flex';
-                            callUi.placeholder.style.display = 'none';
-                            callUi.status.innerText = "✅ Соединение установлено";
-                            callUi.status.style.color = "#a6e3a1";
-                        });
-                        mediaCall.on('close', resetCallUI);
-                    } else {
-                        callUi.status.innerText = "✅ Чат активен";
-                        callUi.status.style.color = "#a6e3a1";
-                    }
-                }
-                else if (data.type === 'reject') {
-                    stopDialTone(); playHangupTone();
-                    callUi.status.innerText = data.reason === 'busy' ? "Абонент занят" : "Вызов отклонен";
-                    callUi.status.style.color = "#f38ba8";
-                    setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 3000);
-                }
-                else if (data.type === 'chat') {
-                    // Пришло сообщение
-                    const peerId = conn.peer;
-                    const isViewing = (document.getElementById('call-view').classList.contains('active') && targetId === peerId);
-                    
-                    if (isViewing) {
-                        playMessageSound();
-                        appendMsg(data.text, false, false, true, null, true, data.timestamp);
-                    } else {
-                        const unread = store.get(`unread_${peerId}`) || 0;
-                        store.set(`unread_${peerId}`, unread + 1);
-                        renderContacts(store.get('contacts') || []);
-                        playMessageSound();
-                        
-                        let history = store.get(`chat_${peerId}`) || [];
-                        history.push({ id: Date.now(), text: data.text, isMine: false, timestamp: data.timestamp });
-                        store.set(`chat_${peerId}`, history);
-                    }
-                }
-                else if (data.type === 'file') {
-                    // Прием файла
-                    const blob = new Blob([data.file]);
-                    const url = URL.createObjectURL(blob);
-                    const linkHtml = `<div style="margin-top: 5px; text-align: center;"><a href="${url}" download="${data.name}" style="display: inline-block; padding: 10px 15px; background: #a6e3a1; color: #1e1e2e; text-decoration: none; font-weight: bold; border-radius: 8px;">📥 Скачать файл<br><span style="font-size:10px; opacity:0.8;">${data.name}</span></a></div>`;
+                targetId = msg.from;
+                callMode = 'incoming';
+                currentCallMode = msg.callType;
+                
+                checkUnknownContact(targetId);
+                
+                document.getElementById('incoming-ring-ui').style.display = 'block';
+                document.getElementById('incoming-canceled-ui').style.display = 'none';
+                callUi.incomingCallerId.innerText = getContactName(targetId);
+                document.getElementById('incoming-call-type').innerText = currentCallMode === 'video' ? '📹 ВИДЕОЗВОНОК' : (currentCallMode === 'audio' ? '📞 ГОЛОСОВОЙ ЗВОНОК' : '💬 ЧАТ');
+                
+                callUi.incomingOverlay.style.display = 'flex';
+                playRingtone();
+            }
+            // 2. Отмена звонка звонящим
+            else if (msg.type === 'cancel') {
+                stopRingtone();
+                document.getElementById('incoming-ring-ui').style.display = 'none';
+                document.getElementById('incoming-canceled-ui').style.display = 'block';
+                setTimeout(() => { callUi.incomingOverlay.style.display = 'none'; resetCallUI(); }, 2000);
+            }
+            // 3. Абонент ответил (Запускаем WebRTC)
+            else if (msg.type === 'accept') {
+                stopDialTone();
+                callUi.status.innerText = "Установка связи (P2P)...";
+                setupPeerConnection();
+                
+                // Создаем дата-канал (он нужен всегда для чата и файлов)
+                setupDataChannel(peerConnection.createDataChannel('chatAndFiles'));
+                
+                try {
+                    const offer = await peerConnection.createOffer();
+                    await peerConnection.setLocalDescription(offer);
+                    sendSignal(targetId, { type: 'offer', offer: offer });
+                } catch(e) { console.error("Offer Error", e); }
+            }
+            // 4. Абонент отклонил
+            else if (msg.type === 'reject') {
+                stopDialTone(); playHangupTone();
+                callUi.status.innerText = msg.reason === 'busy' ? "Абонент занят" : "Вызов отклонен";
+                callUi.status.style.color = "#f38ba8";
+                setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 3000);
+            }
+            // 5. Получен Offer (Отвечаем)
+            else if (msg.type === 'offer') {
+                setupPeerConnection();
+                peerConnection.ondatachannel = (e) => setupDataChannel(e.channel);
+                
+                try {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.offer));
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    sendSignal(targetId, { type: 'answer', answer: answer });
+                } catch(e) { console.error("Answer Error", e); }
+            }
+            // 6. Получен Answer (Завершаем хендшейк)
+            else if (msg.type === 'answer') {
+                try {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.answer));
+                } catch(e) { console.error("RemoteDesc Error", e); }
+            }
+            // 7. Получены маршруты (ICE)
+            else if (msg.type === 'candidate') {
+                try {
+                    if (peerConnection) await peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                } catch(e) {}
+            }
+            // 8. Резервный оффлайн чат через MQTT
+            else if (msg.type === 'chat') {
+                const peerId = msg.from;
+                const isViewing = (document.getElementById('call-view').classList.contains('active') && targetId === peerId);
+                
+                if (isViewing) {
                     playMessageSound();
-                    appendMsg(linkHtml, false, true, true, `[Получен файл: ${data.name}]`);
+                    appendMsg(msg.text, false, false, true, null, true, msg.timestamp);
+                } else {
+                    const unread = store.get(`unread_${peerId}`) || 0;
+                    store.set(`unread_${peerId}`, unread + 1);
+                    renderContacts(store.get('contacts') || []);
+                    playMessageSound();
+                    
+                    let history = store.get(`chat_${peerId}`) || [];
+                    history.push({ id: Date.now(), text: msg.text, isMine: false, timestamp: msg.timestamp });
+                    store.set(`chat_${peerId}`, history);
                 }
-            });
-
-            conn.on('close', () => {
-                if(callMode !== 'idle') resetCallUI();
-            });
+            }
         }
 
+        function setupPeerConnection() {
+            if (peerConnection) peerConnection.close();
+            peerConnection = new RTCPeerConnection(rtcConfig);
+
+            // Добавляем наши медиа треки в P2P туннель
+            if (localStream && currentCallMode !== 'chat') {
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+            }
+
+            // Отправляем свои маршруты собеседнику
+            peerConnection.onicecandidate = (e) => {
+                if (e.candidate) {
+                    sendSignal(targetId, { type: 'candidate', candidate: e.candidate });
+                }
+            };
+
+            // Получаем медиа треки от собеседника
+            peerConnection.ontrack = (e) => {
+                if (!callUi.remoteVideo.srcObject || callUi.remoteVideo.srcObject.id !== e.streams[0].id) {
+                    callUi.remoteVideo.srcObject = e.streams[0];
+                }
+                document.querySelector('.video-panel').style.display = 'flex';
+                callUi.remoteVideo.style.display = 'block';
+                callUi.localVideo.style.display = 'block';
+                callUi.placeholder.style.display = 'none';
+            };
+
+            // Отслеживаем статус
+            peerConnection.onconnectionstatechange = () => {
+                if (peerConnection.connectionState === 'connected') {
+                    callUi.status.innerText = "✅ Связь установлена";
+                    callUi.status.style.color = "#a6e3a1";
+                } else if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed') {
+                    playHangupTone();
+                    callUi.status.innerText = "Связь прервана";
+                    callUi.status.style.color = "#f38ba8";
+                    setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 2000);
+                }
+            };
+        }
+
+        function setupDataChannel(channel) {
+            dataChannel = channel;
+            dataChannel.binaryType = 'arraybuffer';
+            
+            dataChannel.onopen = () => { enableChatUI(); };
+            
+            dataChannel.onmessage = (e) => {
+                // Прием бинарных кусков файла
+                if (e.data instanceof ArrayBuffer) {
+                    if (incomingFileInfo) {
+                        fileReceiveBuffer.push(e.data);
+                        const receivedSize = fileReceiveBuffer.reduce((acc, val) => acc + val.byteLength, 0);
+                        document.getElementById('file-progress-bar').style.width = `${(receivedSize / incomingFileInfo.size) * 100}%`;
+                    }
+                    return;
+                }
+                
+                // Прием текста и JSON
+                let data;
+                try { data = JSON.parse(e.data); } catch(err) { return; }
+                
+                if (data.type === 'chat') {
+                    playMessageSound();
+                    appendMsg(data.text, false, false, true, null, true, data.timestamp);
+                } 
+                else if (data.type === 'file-start') {
+                    incomingFileInfo = data; 
+                    fileReceiveBuffer = [];
+                    document.getElementById('file-progress-container').style.display = 'block';
+                    document.getElementById('file-progress-text').innerText = `Прием: ${data.name}...`;
+                    document.getElementById('file-progress-bar').style.width = '0%';
+                } 
+                else if (data.type === 'file-end') {
+                    document.getElementById('file-progress-container').style.display = 'none';
+                    const blob = new Blob(fileReceiveBuffer);
+                    const url = URL.createObjectURL(blob);
+                    const linkHtml = `<div style="margin-top: 5px; text-align: center;"><a href="${url}" download="${incomingFileInfo.name}" style="display: inline-block; padding: 10px 15px; background: #a6e3a1; color: #1e1e2e; text-decoration: none; font-weight: bold; border-radius: 8px;">📥 Скачать файл<br><span style="font-size:10px; opacity:0.8;">${incomingFileInfo.name}</span></a></div>`;
+                    
+                    playMessageSound(); 
+                    appendMsg(linkHtml, false, true, true, `[Получен файл: ${incomingFileInfo.name}]`);
+                    
+                    fileReceiveBuffer = []; 
+                    incomingFileInfo = null;
+                }
+            };
+        }
+
+        // Кнопка позвонить
         async function makeCall(targetIdStr, mode) {
             targetId = targetIdStr.toUpperCase();
             currentCallMode = mode;
@@ -693,9 +767,8 @@
             checkUnknownContact(targetId);
             loadChatHistory(targetId);
             
-            callUi.status.innerText = `Подключение...`;
+            callUi.status.innerText = `Подготовка...`;
             
-            // Запрашиваем медиа если нужно
             if (mode !== 'chat') {
                 await initMedia(mode);
             } else {
@@ -704,23 +777,19 @@
                 document.getElementById('toggle-mic').style.opacity = '0.5';
             }
 
-            // Создаем дата-канал и звоним
-            dataConnection = peer.connect(targetId, { reliable: true });
-            setupDataConnection(dataConnection);
-
-            dataConnection.on('open', () => {
-                callUi.status.innerText = `Звоним...`;
-                dataConnection.send({ type: 'ring', callType: mode });
-                playDialTone();
-                
-                ringTimeout = setTimeout(() => {
-                    if (callMode === 'calling') {
-                        stopDialTone(); playHangupTone();
-                        callUi.status.innerText = "Нет ответа"; callUi.status.style.color = "#f38ba8";
-                        setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 3000);
-                    }
-                }, 30000);
-            });
+            callUi.status.innerText = `Звоним...`;
+            sendSignal(targetId, { type: 'ring', callType: mode });
+            playDialTone();
+            
+            ringTimeout = setTimeout(() => {
+                if (callMode === 'calling') {
+                    stopDialTone(); playHangupTone();
+                    sendSignal(targetId, { type: 'cancel' }); // Отмена вызова если не ответили
+                    callUi.status.innerText = "Нет ответа"; callUi.status.style.color = "#f38ba8";
+                    setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 3000);
+                }
+            }, 30000);
+            
             wakeUpControls();
         }
 
@@ -736,29 +805,21 @@
             loadChatHistory(targetId);
             
             if (currentCallMode !== 'chat') {
-                callUi.status.innerText = `Запуск камеры/микрофона...`;
+                callUi.status.innerText = `Запуск оборудования...`;
                 await initMedia(currentCallMode);
             } else {
                 document.querySelector('.video-panel').style.display = 'none';
             }
 
             callUi.status.innerText = `Соединение...`;
-            if (dataConnection && dataConnection.open) {
-                dataConnection.send({ type: 'accept' });
-                if (currentCallMode !== 'chat' && mediaCall) {
-                     mediaCall.answer(localStream);
-                }
-                if (currentCallMode === 'chat') {
-                     callUi.status.innerText = "✅ Чат активен";
-                     callUi.status.style.color = "#a6e3a1";
-                }
-            }
+            sendSignal(targetId, { type: 'accept' });
+            
             wakeUpControls();
         };
 
         document.getElementById('reject-call-btn').onclick = () => {
             stopRingtone(); callUi.incomingOverlay.style.display = 'none';
-            if (dataConnection && dataConnection.open) dataConnection.send({ type: 'reject', reason: 'declined' });
+            sendSignal(targetId, { type: 'reject', reason: 'declined' });
             resetCallUI();
         };
 
@@ -778,15 +839,15 @@
                 }
             } catch (e) {
                 console.error("No media:", e);
-                showModal("Не удалось получить доступ к камере/микрофону. Проверьте разрешения.");
+                showModal("Не удалось получить доступ к камере/микрофону. Проверьте разрешения в браузере.");
             }
         }
 
         function resetCallUI() {
             stopDialTone(); stopRingtone(); clearTimeout(ringTimeout);
             
-            if (mediaCall) { mediaCall.close(); mediaCall = null; }
-            if (dataConnection) { dataConnection.close(); dataConnection = null; }
+            if (peerConnection) { peerConnection.close(); peerConnection = null; }
+            if (dataChannel) { dataChannel.close(); dataChannel = null; }
             if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
             if (screenStream) { screenStream.getTracks().forEach(t => t.stop()); screenStream = null; }
             
@@ -805,6 +866,11 @@
             
             callMode = 'idle';
             targetId = null;
+            
+            if (mqttClient && mqttClient.connected) {
+                callUi.status.innerText = "В сети (Защищено)";
+                callUi.status.style.color = "#a6e3a1";
+            }
         }
 
         function enableChatUI() {
@@ -842,34 +908,74 @@
 
         callUi.sendBtn.onclick = () => {
             const text = callUi.msgInput.value.trim();
-            if (!text || !dataConnection || !dataConnection.open) return;
+            if (!text) return;
             const time = Date.now();
+            
             appendMsg(text, true, false, true, null, true, time); 
-            dataConnection.send({ type: 'chat', text: text, timestamp: time });
+            
+            // Если есть P2P дата-канал, шлем по нему (мгновенно)
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify({ type: 'chat', text: text, timestamp: time }));
+            } else {
+                // Если нет P2P канала (оффлайн режим), шлем через MQTT (доставка 100%)
+                sendSignal(targetId, { type: 'chat', text: text, timestamp: time });
+            }
             callUi.msgInput.value = '';
         };
 
         callUi.msgInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); callUi.sendBtn.click(); }});
 
         callUi.hangupBtn.onclick = () => {
-            if (dataConnection && dataConnection.open) dataConnection.send({ type: 'cancel' });
+            if (callMode !== 'idle') sendSignal(targetId, { type: 'cancel' });
             playHangupTone();
             callUi.status.innerText = "Завершение...";
             setTimeout(() => { resetCallUI(); switchTab('contacts'); }, 1000); 
         };
 
-        // Отправка файла (Через PeerJS)
+        // Отправка файла (Ручное дробление на куски для P2P)
         callUi.fileInput.addEventListener('change', () => {
             const file = callUi.fileInput.files[0];
-            if (!file || !dataConnection || !dataConnection.open) return;
+            if (!file) return;
+            if (!dataChannel || dataChannel.readyState !== 'open') return showModal("Дождитесь установки P2P соединения для передачи файлов.");
             if (file.size > 50 * 1024 * 1024) return showModal("Размер файла не должен превышать 50 МБ.");
 
+            document.getElementById('file-progress-container').style.display = 'block';
+            document.getElementById('file-progress-text').innerText = `Отправка: ${file.name}...`;
+            document.getElementById('file-progress-bar').style.width = '0%';
+
+            dataChannel.send(JSON.stringify({ type: 'file-start', name: file.name, size: file.size }));
+
+            let offset = 0;
             const reader = new FileReader();
-            reader.onload = (e) => {
-                dataConnection.send({ type: 'file', file: e.target.result, name: file.name });
-                appendMsg(`<i>Файл <b>${file.name}</b> отправлен</i>`, true, true, true, `[Отправлен файл: ${file.name}]`);
+
+            const sendNextChunk = () => {
+                if (offset >= file.size) {
+                    dataChannel.send(JSON.stringify({ type: 'file-end' }));
+                    document.getElementById('file-progress-container').style.display = 'none';
+                    appendMsg(`<i>Файл <b>${file.name}</b> отправлен</i>`, true, true, true, `[Отправлен файл: ${file.name}]`);
+                    callUi.fileInput.value = ''; 
+                    return;
+                }
+                
+                // Защита от переполнения буфера
+                if (dataChannel.bufferedAmount > 1024 * 1024) {
+                    setTimeout(sendNextChunk, 50);
+                    return;
+                }
+
+                const slice = file.slice(offset, offset + CHUNK_SIZE);
+                reader.onload = (e) => {
+                    dataChannel.send(e.target.result);
+                    offset += slice.size;
+                    document.getElementById('file-progress-bar').style.width = `${(offset / file.size) * 100}%`;
+                    
+                    if (offset % (CHUNK_SIZE * 50) === 0) setTimeout(sendNextChunk, 0); // Передышка браузеру
+                    else sendNextChunk();
+                };
+                reader.readAsArrayBuffer(slice);
             };
-            reader.readAsArrayBuffer(file);
+
+            sendNextChunk();
         });
 
         // Эмодзи
@@ -964,18 +1070,18 @@
                 callUi.localVideo.srcObject = localStream;
                 callUi.localVideo.style.transform = currentFacingMode === 'user' ? 'scaleX(-1)' : 'none';
                 
-                if (mediaCall && mediaCall.peerConnection) {
-                    const sender = mediaCall.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+                if (peerConnection) {
+                    const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
                     if (sender) sender.replaceTrack(newTrack);
                 }
             } catch(e) {}
         };
 
         document.getElementById('share-screen').onclick = async function() {
-            if (!mediaCall || !mediaCall.peerConnection) return;
+            if (!peerConnection) return;
             if (isScreenSharing) { 
                 if (screenStream) screenStream.getTracks().forEach(t => t.stop());
-                const s = mediaCall.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+                const s = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
                 const localTrack = localStream ? localStream.getVideoTracks()[0] : null;
                 if (s && localTrack) { s.replaceTrack(localTrack); callUi.localVideo.srcObject = localStream; }
                 this.innerHTML = "Экран"; this.style.background = "#a6e3a1"; isScreenSharing = false; 
@@ -984,7 +1090,7 @@
             try {
                 screenStream = await navigator.mediaDevices.getDisplayMedia({video: true});
                 const screenTrack = screenStream.getVideoTracks()[0];
-                const s = mediaCall.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+                const s = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
                 if (s) s.replaceTrack(screenTrack);
                 callUi.localVideo.srcObject = screenStream;
                 this.innerHTML = "Ост."; this.style.background = "#f38ba8"; isScreenSharing = true;
@@ -1017,11 +1123,11 @@
         document.getElementById('cancel-id-btn').onclick = () => { document.getElementById('id-edit-container').style.display = 'none'; document.getElementById('id-display-container').style.display = 'flex'; };
         document.getElementById('save-id-btn').onclick = () => {
             const newId = document.getElementById('new-id-input').value.trim().toUpperCase(); 
-            if (newId) { store.set('myId', newId); myId = newId; initPeer(); document.getElementById('cancel-id-btn').click(); }
+            if (newId) { store.set('myId', newId); myId = newId; initMQTT(); document.getElementById('cancel-id-btn').click(); }
         };
 
         // Запуск
-        initPeer();
+        initMQTT();
 
     </script>
 </body>

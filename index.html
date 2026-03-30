@@ -463,6 +463,53 @@
             document.getElementById('add-unknown-modal').style.display = 'none';
         };
 
+        // --- 3.5 НАСТРОЙКИ И ДИАГНОСТИКА ---
+        let testStream, analyzer, micInterval;
+
+        async function requestMediaPermissions() {
+            try {
+                testStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacingMode }, audio: true });
+                document.getElementById('test-video').srcObject = testStream;
+                document.getElementById('test-video').style.transform = currentFacingMode === 'user' ? 'scaleX(-1)' : 'none';
+                document.getElementById('settings-switch-cam').style.display = 'block';
+
+                const source = audioCtx.createMediaStreamSource(testStream);
+                analyzer = audioCtx.createAnalyser(); analyzer.fftSize = 256; source.connect(analyzer);
+                const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+                if (micInterval) clearInterval(micInterval);
+                micInterval = setInterval(() => {
+                    analyzer.getByteFrequencyData(dataArray);
+                    let sum = 0; for(let i=0; i < dataArray.length; i++) sum += dataArray[i];
+                    let level = Math.min(100, ((sum / dataArray.length) / 80) * 100);
+                    document.getElementById('mic-level').style.width = level + '%';
+                    document.getElementById('mic-level').style.background = level > 85 ? '#f44336' : (level > 50 ? '#ff9800' : '#4caf50');
+                }, 50);
+                document.getElementById('req-perm-btn').innerText = "✅ Оборудование работает";
+                document.getElementById('req-perm-btn').style.background = "#4caf50";
+            } catch (e) {
+                showModal("Доступ запрещен! Разрешите использование камеры и микрофона в настройках браузера.", "Ошибка", "🚫");
+            }
+        }
+
+        document.getElementById('settings-btn').onclick = () => {
+            document.getElementById('settings-modal').style.display = 'flex';
+            document.getElementById('req-perm-btn').innerText = "🎥 Разрешить Камеру/Микрофон";
+            document.getElementById('req-perm-btn').style.background = "#1976d2";
+            requestMediaPermissions();
+        };
+
+        document.getElementById('close-settings-btn').onclick = () => {
+            document.getElementById('settings-modal').style.display = 'none';
+            if (testStream) testStream.getTracks().forEach(t => t.stop());
+            if (micInterval) clearInterval(micInterval); testStream = null;
+        };
+
+        document.getElementById('settings-switch-cam').onclick = () => {
+            currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+            if (testStream) testStream.getTracks().forEach(t => t.stop());
+            requestMediaPermissions();
+        };
+
         // --- 4. АУДИО (ЗВОНКИ И УВЕДОМЛЕНИЯ) ---
         function playRingtone() {
             if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -645,6 +692,17 @@
                     if (peerConnection) await peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate));
                 } catch(e) {}
             }
+            // 7.5. Тихий запрос на P2P (для чата и файлов без гудков)
+            else if (msg.type === 'silent_offer') {
+                setupPeerConnection();
+                peerConnection.ondatachannel = (e) => setupDataChannel(e.channel);
+                try {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.offer));
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    sendSignal(msg.from, { type: 'answer', answer: answer });
+                } catch(e) { console.error("Silent Answer Error", e); }
+            }
             // 8. Резервный оффлайн чат через MQTT
             else if (msg.type === 'chat') {
                 const peerId = msg.from;
@@ -758,7 +816,7 @@
         async function makeCall(targetIdStr, mode) {
             targetId = targetIdStr.toUpperCase();
             currentCallMode = mode;
-            callMode = 'calling';
+            callMode = mode === 'chat' ? 'active' : 'calling'; // Чат активируется сразу
             
             store.set(`unread_${targetId}`, 0);
             renderContacts(store.get('contacts') || []);
@@ -767,15 +825,35 @@
             checkUnknownContact(targetId);
             loadChatHistory(targetId);
             
-            callUi.status.innerText = `Подготовка...`;
-            
-            if (mode !== 'chat') {
-                await initMedia(mode);
-            } else {
+            // --- ЛОГИКА АСИНХРОННОГО ЧАТА ---
+            if (mode === 'chat') {
+                callUi.status.innerText = `Чат (MQTT)`;
                 document.querySelector('.video-panel').style.display = 'none';
-                document.getElementById('toggle-cam').style.opacity = '0.5';
-                document.getElementById('toggle-mic').style.opacity = '0.5';
+                
+                // Делаем кнопки яркими, чтобы при клике из чата можно было начать видео/аудио звонок
+                document.getElementById('toggle-cam').style.opacity = '1';
+                document.getElementById('toggle-mic').style.opacity = '1';
+                document.getElementById('toggle-cam').style.textDecoration = 'none';
+                document.getElementById('toggle-mic').style.textDecoration = 'none';
+                
+                enableChatUI();
+                
+                // В фоне поднимаем P2P для передачи файлов (без звонка и гудков)
+                setupPeerConnection();
+                setupDataChannel(peerConnection.createDataChannel('chatAndFiles'));
+                try {
+                    const offer = await peerConnection.createOffer();
+                    await peerConnection.setLocalDescription(offer);
+                    sendSignal(targetId, { type: 'silent_offer', offer: offer });
+                } catch(e) {}
+                
+                wakeUpControls();
+                return; // Прерываем функцию, чтобы не было гудков
             }
+
+            // --- ЛОГИКА АУДИО/ВИДЕО ЗВОНКА ---
+            callUi.status.innerText = `Подготовка...`;
+            await initMedia(mode);
 
             callUi.status.innerText = `Звоним...`;
             sendSignal(targetId, { type: 'ring', callType: mode });
@@ -1029,6 +1107,20 @@
             document.querySelectorAll('.btn-call-video, .btn-call-audio, .btn-call-chat').forEach(btn => btn.onclick = (e) => { e.stopPropagation(); makeCall(e.currentTarget.getAttribute('data-id'), e.currentTarget.getAttribute('data-mode')); });
             
             document.querySelectorAll('.btn-del').forEach(btn => btn.onclick = (e) => { e.stopPropagation(); const contacts = store.get('contacts'); contacts.splice(e.currentTarget.getAttribute('data-index'), 1); store.set('contacts', contacts); renderContacts(contacts); });
+
+            // ВОССТАНАВЛИВАЕМ КНОПКУ РЕДАКТИРОВАНИЯ (КАРАНДАШ)
+            document.querySelectorAll('.btn-edit').forEach(btn => btn.onclick = (e) => {
+                e.stopPropagation();
+                const index = e.currentTarget.getAttribute('data-index');
+                const contacts = store.get('contacts') || [];
+                const contact = contacts[index];
+                if (contact) {
+                    document.getElementById('edit-contact-index').value = index;
+                    document.getElementById('edit-contact-name').value = contact.name;
+                    document.getElementById('edit-contact-id').value = contact.id;
+                    document.getElementById('edit-contact-modal').style.display = 'flex';
+                }
+            });
         }
 
         renderContacts(store.get('contacts') || []);
@@ -1041,8 +1133,35 @@
             document.getElementById('contact-name').value = ''; document.getElementById('contact-id').value = '';
         };
 
-        // UI контролы камеры/микрофона
+        // ВОССТАНАВЛИВАЕМ СОХРАНЕНИЕ И ОТМЕНУ РЕДАКТИРОВАНИЯ
+        document.getElementById('cancel-edit-btn').onclick = () => {
+            document.getElementById('edit-contact-modal').style.display = 'none';
+        };
+
+        document.getElementById('save-edit-btn').onclick = () => {
+            const index = document.getElementById('edit-contact-index').value;
+            const name = document.getElementById('edit-contact-name').value.trim();
+            const id = document.getElementById('edit-contact-id').value.trim().toUpperCase();
+            
+            if (!name || !id) return showModal("Пожалуйста, заполните поля Имя и ID.", "Ошибка", "⚠️");
+            
+            const contacts = store.get('contacts') || [];
+            if (contacts[index]) {
+                contacts[index].name = name;
+                contacts[index].id = id;
+                store.set('contacts', contacts); 
+                renderContacts(contacts);
+                document.getElementById('edit-contact-modal').style.display = 'none';
+            }
+        };
+
+        // UI контролы камеры/микрофона (превращают чат в звонок)
         document.getElementById('toggle-mic').onclick = function() {
+            // Если мы просто в чате — начинаем аудиозвонок!
+            if (currentCallMode === 'chat' && callMode === 'active' && targetId) {
+                makeCall(targetId, 'audio');
+                return;
+            }
             if (!localStream) return;
             const t = localStream.getAudioTracks()[0]; 
             t.enabled = !t.enabled;
@@ -1051,6 +1170,11 @@
         };
         
         document.getElementById('toggle-cam').onclick = function() {
+            // Если мы просто в чате — начинаем видеозвонок!
+            if (currentCallMode === 'chat' && callMode === 'active' && targetId) {
+                makeCall(targetId, 'video');
+                return;
+            }
             if (!localStream) return;
             const t = localStream.getVideoTracks()[0]; 
             t.enabled = !t.enabled;
